@@ -19,7 +19,7 @@ function captureInteractiveElements(options = {}) {
       text: "",
       x: 0,
       y: 0,
-      inViewport: false
+      inViewport: false // Added inViewport flag for PDF case
     }];
   }
 
@@ -39,8 +39,8 @@ function captureInteractiveElements(options = {}) {
     document.body.appendChild(highlightContainer);
   }
 
-   // --- Helper Function: Check if Element is in Viewport ---
-   function isElementInViewport(el) {
+  // --- Helper Function: Check if Element is in Viewport ---
+  function isElementInViewport(el) {
     const rect = el.getBoundingClientRect();
     return (
       rect.top >= 0 &&
@@ -51,18 +51,10 @@ function captureInteractiveElements(options = {}) {
   }
 
   // --- Core Functions ---
-  function getXPath(element, frameContext = null) {
-    // If the element is in an iframe, start with iframe's xpath
-    let prefix = '';
-    if (frameContext && frameContext.frameElement) {
-      prefix = '';
-    }
-
-    if (element.id) return `${prefix}//*[@id="${element.id}"]`;
-
+  function getXPath(element) {
+    if (element.id) return `//*[@id="${element.id}"]`;
     const parts = [];
     let current = element;
-
     while (current && current.nodeType === Node.ELEMENT_NODE) {
       let index = Array.from(current.parentNode.children)
         .filter(e => e.tagName === current.tagName)
@@ -74,8 +66,7 @@ function captureInteractiveElements(options = {}) {
       );
       current = current.parentNode;
     }
-
-    return parts.length ? `${prefix}/${parts.join('/')}` : '';
+    return parts.length ? `/${parts.join('/')}` : '';
   }
 
   function isInteractiveElement(element) {
@@ -230,6 +221,8 @@ function captureInteractiveElements(options = {}) {
     if (tag === 'video') return 'video-player';
 
     // --- Final Fallback ---
+    // If nothing specific was determined and the tag is simply 'div' or 'a',
+    // use additional cues (click handler, cursor style, or text content) to decide.
     let finalType = tag || role;
     if (finalType === 'div' || finalType === 'a') {
       const style = window.getComputedStyle(element);
@@ -245,24 +238,28 @@ function captureInteractiveElements(options = {}) {
   }
 
   function getElementText(element, type) {
+    // Prioritize visible text
     const visibleText = element.textContent.trim().replace(/\s+/g, ' ');
     if (visibleText) return visibleText;
 
+    // Label associations
     if (type.endsWith('-input') || ['checkbox', 'radio', 'dropdown'].includes(type)) {
       const id = element.id;
       if (id) {
-        const label = element.ownerDocument.querySelector(`label[for="${id}"]`);
+        const label = document.querySelector(`label[for="${id}"]`);
         if (label) return label.textContent.trim();
       }
     }
 
+    // Image handling
     if (element.tagName === 'IMG') {
       return element.getAttribute('alt')?.trim() || '';
     }
 
+    // ARIA labels
     const labelledBy = element.getAttribute('aria-labelledby');
     if (labelledBy) {
-      const refElement = element.ownerDocument.getElementById(labelledBy);
+      const refElement = document.getElementById(labelledBy);
       if (refElement) return refElement.textContent.trim();
     }
 
@@ -270,15 +267,18 @@ function captureInteractiveElements(options = {}) {
   }
 
   function getElementDescription(element, type) {
+    // Base information
     const ariaLabel = element.getAttribute('aria-label')?.trim();
     const title = element.getAttribute('title')?.trim();
     const baseText = ariaLabel || title || getElementText(element, type);
 
+    // State tracking
     const states = [];
     if (element.disabled) states.push('disabled');
     if (element.checked) states.push('checked');
     const statePrefix = states.length ? `[${states.join(',')}] ` : '';
 
+    // --- Enhanced Descriptions ---
     if (type.endsWith('-input')) {
       const inputType = type.replace('-input', '');
       const placeholder = element.getAttribute('placeholder') || '';
@@ -293,120 +293,100 @@ function captureInteractiveElements(options = {}) {
     switch (type) {
       case 'menu-container':
         return `${statePrefix}Menu: ${baseText || 'Context options'}`;
+
       case 'menu-item':
         const menuParent = element.closest('[role="menu"], [role="menubar"]');
         const menuLabel = menuParent?.getAttribute('aria-label') || '';
         return `${statePrefix}Menu option${menuLabel ? ` in ${menuLabel}` : ''}: ${baseText}`;
+
       case 'doc-menu-item':
         const menuPath = Array.from(element.closest('[role="menu"]')?.querySelectorAll('[role="menuitem"]') || [])
           .map(item => item.textContent.trim())
           .join(' ▸ ');
         return `${statePrefix}Document menu: ${menuPath}`;
+
       case 'doc-toolbar-button':
         const toolbar = element.closest('[role="toolbar"]');
         const toolbarLabel = toolbar?.getAttribute('aria-label') || 'Document tools';
         return `${statePrefix}${toolbarLabel}: ${baseText}`;
+
       case 'list-container':
         return `${statePrefix}List: ${baseText || 'Selectable items'}`;
+
       case 'list-item':
         const listParent = element.closest('[role="listbox"]');
         const listLabel = listParent?.getAttribute('aria-label') || '';
         return `${statePrefix}List item${listLabel ? ` in ${listLabel}` : ''}: ${baseText}`;
+
       case 'toolbar-button':
         const toolbarParent = element.closest('[role="toolbar"]');
         const toolbarParentLabel = toolbarParent?.getAttribute('aria-label') || '';
         return `${statePrefix}Toolbar button${toolbarParentLabel ? ` in ${toolbarParentLabel}` : ''}: ${baseText}`;
+
       case 'expandable-section':
         const expandedState = element.getAttribute('aria-expanded') === 'true' ? 'expanded' : 'collapsed';
         return `${statePrefix}Expandable section (${expandedState}): ${baseText}`;
+
       default:
         return `${statePrefix}${type.replace(/-/g, ' ')}${baseText ? `: ${baseText}` : ''}`;
     }
   }
 
   // --- Modified Highlight Function ---
-  // For each input-type element, a top label shows the index above the marking box.
-  // A bottom label is always displayed below the box showing the associated descriptive text.
-  function highlightElement(element, index, frameContext = null) {
+  function highlightElement(element, index) {
     if (!DEBUG_HIGHLIGHT || !highlightContainer) return;
 
+    // Determine type and description for the overlay label.
     const type = getElementType(element);
     const description = getElementDescription(element, type);
 
-    const topLabelText = `${index}`;
-    const bottomLabelText = description; // Always show descriptive text for input elements
-
-    // Get element rect relative to the top document
-    const getAbsoluteRect = (el, context) => {
-      const rect = el.getBoundingClientRect();
-
-      // Start with the element's rect
-      let absoluteRect = {
-        top: rect.top,
-        left: rect.left,
-        width: rect.width,
-        height: rect.height
-      };
-
-      // If it's in an iframe, adjust position
-      if (context && context.frameElement) {
-        const frameRect = context.frameElement.getBoundingClientRect();
-        absoluteRect.top += frameRect.top;
-        absoluteRect.left += frameRect.left;
+    // Define an array of important keywords for button text.
+    const importantKeywords = ['login', 'submit', 'done', 'search'];
+    let showFullText = false;
+    // Show full text for text input elements.
+    if (type === 'text-input' || type === 'search-input') {
+      showFullText = true;
+    }
+    // For buttons, check if the description contains one of the keywords.
+    else if (type === 'button' || type === 'icon-button') {
+      const lowerDesc = description.toLowerCase();
+      for (const keyword of importantKeywords) {
+        if (lowerDesc.includes(keyword)) {
+          showFullText = true;
+          break;
+        }
       }
+    }
+    // Create a top label that shows only the index.
+    const topLabelText = `${index}`;
+    // Create a bottom label text only if showFullText is true.
+    const bottomLabelText = showFullText ? description : '';
 
-      // Add scroll offset of the main document
-      absoluteRect.top += window.scrollY;
-      absoluteRect.left += window.scrollX;
+    Array.from(element.getClientRects()).forEach(rect => {
+      const overlay = document.createElement('div');
+      // Choose a color from our palette.
+      const color = highlightColors[index % highlightColors.length];
 
-      return absoluteRect;
-    };
-
-    const abRect = getAbsoluteRect(element, frameContext);
-
-    const overlay = document.createElement('div');
-    const color = highlightColors[index % highlightColors.length];
-
-    Object.assign(overlay.style, {
-      position: 'absolute',
-      border: `1px dashed ${color}`,
-      backgroundColor: `${color}10`,
-      top: `${abRect.top + 2}px`,
-      left: `${abRect.left + 2}px`,
-      width: `${abRect.width - 4}px`,
-      height: `${abRect.height - 4}px`,
-      pointerEvents: 'none'
-    });
-
-    // Top label: displays only the index above the box.
-    const topLabel = document.createElement('div');
-    topLabel.textContent = topLabelText;
-    Object.assign(topLabel.style, {
-      position: 'absolute',
-      top: '-16px',
-      left: '0',
-      background: color + '80',
-      color: 'white',
-      padding: '1px 3px',
-      borderRadius: '2px',
-      fontSize: '10px',
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      lineHeight: '1',
-      textShadow: '1px 1px 2px rgba(0,0,0,0.8)'
-    });
-    overlay.appendChild(topLabel);
-
-    // Bottom label: displays the descriptive text below the box.
-    if (bottomLabelText) {
-      const bottomLabel = document.createElement('div');
-      bottomLabel.textContent = bottomLabelText;
-      Object.assign(bottomLabel.style, {
+      // Reduce the overlay box size slightly to avoid visual clutter.
+      Object.assign(overlay.style, {
         position: 'absolute',
-        bottom: '-16px',
+        border: `1px dashed ${color}`,
+        backgroundColor: `${color}10`, // very light background
+        top: `${rect.top + window.scrollY + 2}px`,
+        left: `${rect.left + window.scrollX + 2}px`,
+        width: `${rect.width - 4}px`,
+        height: `${rect.height - 4}px`,
+        pointerEvents: 'none'
+      });
+
+      // Top label: displays the index above the box.
+      const topLabel = document.createElement('div');
+      topLabel.textContent = topLabelText;
+      Object.assign(topLabel.style, {
+        position: 'absolute',
+        top: '-16px',
         left: '0',
-        background: color + '80',
+        background: color + '80', // using the highlight color with added opacity
         color: 'white',
         padding: '1px 3px',
         borderRadius: '2px',
@@ -417,159 +397,66 @@ function captureInteractiveElements(options = {}) {
         lineHeight: '1',
         textShadow: '1px 1px 2px rgba(0,0,0,0.8)'
       });
-      overlay.appendChild(bottomLabel);
-    }
+      overlay.appendChild(topLabel);
 
-    highlightContainer.appendChild(overlay);
-  }
-
-  // --- New Function to Safely Access Iframe Content ---
-  function safelyAccessIframe(iframe) {
-    try {
-      // Try to access the iframe's contentWindow
-      const iframeWindow = iframe.contentWindow;
-
-      // Check if we can access the document
-      if (iframeWindow && iframeWindow.document) {
-        return iframeWindow;
+      // Bottom label: displays the full text below the box if applicable.
+      if (bottomLabelText) {
+        const bottomLabel = document.createElement('div');
+        bottomLabel.textContent = bottomLabelText;
+        Object.assign(bottomLabel.style, {
+          position: 'absolute',
+          bottom: '-16px',
+          left: '0',
+          background: color + '80',
+          color: 'white',
+          padding: '1px 3px',
+          borderRadius: '2px',
+          fontSize: '10px',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          lineHeight: '1',
+          textShadow: '1px 1px 2px rgba(0,0,0,0.8)'
+        });
+        overlay.appendChild(bottomLabel);
       }
-    } catch (e) {
-      console.warn(`Cannot access iframe content due to same-origin policy: ${e.message}`);
-    }
-    return null;
-  }
 
-  // --- Modified Element Collection ---
-  // Define the set of accepted input types
-  const inputTypes = new Set([
-    'text-input',
-    'search-input',
-    'checkbox',
-    'radio',
-    'email-input',
-    'password-input',
-    'number-input',
-    'date-input',
-    'time-input',
-    'phone-input',
-    'url-input',
-    'range-input',
-    'color-input',
-    'file-input',
-    'text-area',
-    'dropdown'  // Added to capture select elements
-  ]);
-
-  // Function to process elements using a tree walker
-  function processDocumentWithWalker(doc, frameContext = null) {
-    const elements = [];
-
-    const walker = doc.createTreeWalker(
-      doc.body,
-      NodeFilter.SHOW_ELEMENT,
-      {
-        acceptNode: node => {
-          if (!isInteractiveElement(node)) return NodeFilter.FILTER_SKIP;
-          const type = getElementType(node);
-          return inputTypes.has(type)
-            ? NodeFilter.FILTER_ACCEPT
-            : NodeFilter.FILTER_SKIP;
-        }
-      }
-    );
-
-    while (walker.nextNode()) {
-      const current = walker.currentNode;
-      if (!elements.some(el => el.contains(current))) {
-        elements.push(current);
-        highlightElement(current, elementIndex, frameContext);
-        elementIndex++;
-      }
-    }
-
-    return elements;
-  }
-
-  // Process iframe contents
-  function processIframes(doc = document) {
-    let allElements = [];
-
-    // Get all iframe elements in the document
-    const iframes = doc.querySelectorAll('iframe');
-
-    // First process the main document
-    const mainDocElements = processDocumentWithWalker(doc);
-    allElements = allElements.concat(mainDocElements);
-
-    // Then process each iframe
-    iframes.forEach(iframe => {
-      const frameWindow = safelyAccessIframe(iframe);
-      if (frameWindow) {
-        try {
-          // Process the iframe document
-          const frameElements = processDocumentWithWalker(frameWindow.document, frameWindow);
-          allElements = allElements.concat(frameElements.map(el => ({ element: el, frameContext: frameWindow })));
-
-          // Recursively process nested iframes
-          const nestedFrameElements = processIframes(frameWindow.document);
-          allElements = allElements.concat(nestedFrameElements);
-        } catch (e) {
-          console.warn(`Error processing iframe: ${e.message}`);
-        }
-      }
+      highlightContainer.appendChild(overlay);
     });
-
-    return allElements;
   }
 
-  // --- Collect Elements ---
-  const capturedElements = processIframes();
+  // --- Element Collection ---
+  const capturedElements = [];
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_ELEMENT,
+    { acceptNode: node => isInteractiveElement(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP }
+  );
 
-  // --- Map Elements to Result Objects ---
-  const result = capturedElements.map((item, idx) => {
-    const el = item.element || item;
-    const frameContext = item.frameContext;
-
-    // Calculate the absolute position (relative to top document)
-    let x = 0, y = 0;
-
-    try {
-      const rect = el.getBoundingClientRect();
-      x = rect.left + (rect.width / 2);
-      y = rect.top + (rect.height / 2);
-
-      if (frameContext && frameContext.frameElement) {
-        const frameRect = frameContext.frameElement.getBoundingClientRect();
-        x += frameRect.left;
-        y += frameRect.top;
-      }
-
-      // Add scroll position
-      x += window.scrollX;
-      y += window.scrollY;
-
-      x = Math.round(x);
-      y = Math.round(y);
-    } catch (e) {
-      console.warn(`Error calculating position: ${e.message}`);
+  while (walker.nextNode()) {
+    const current = walker.currentNode;
+    if (!capturedElements.some(el => el.contains(current))) {
+      capturedElements.push(current);
+      highlightElement(current, elementIndex);
+      elementIndex++;
     }
+  }
 
+  // --- Coordinate Calculation ---
+  const result = capturedElements.map((el, idx) => {
+    const rects = Array.from(el.getClientRects());
     const type = getElementType(el);
+    const primaryRect = rects[0] || el.getBoundingClientRect();
 
     return {
       index: idx,
       type: type,
-      xpath: getXPath(el, frameContext),
+      xpath: getXPath(el),
       description: getElementDescription(el, type),
       text: getElementText(el, type),
-      x: x,
-      y: y,
-      inViewport: frameContext ? isElementInViewport(frameContext.frameElement) : isElementInViewport(el),
-      // Add reference to the frame if applicable
-      frameInfo: frameContext ? {
-        src: frameContext.frameElement.getAttribute('src') || frameContext.frameElement.getAttribute('iframesrc') || '',
-        title: frameContext.frameElement.getAttribute('title') || ''
-      } : null
+      x: Math.round(primaryRect.left + primaryRect.width / 2 + window.scrollX),
+      y: Math.round(primaryRect.top + primaryRect.height / 2 + window.scrollY),
+      inViewport: isElementInViewport(el) // Added inViewport flag
     };
   });
 
@@ -582,12 +469,12 @@ function captureInteractiveElements(options = {}) {
   try {
     const runDetection = () => {
       console.clear();
-      console.log('Starting intelligent element detection (including iframe content)...');
+      console.log('Starting intelligent element detection...');
       const results = captureInteractiveElements({ debugHighlight: true });
       console.log(
         'Detection complete. Found %c' +
           results.length +
-          '%c input elements',
+          '%c interactive elements',
         'color: #4CAF50; font-weight: bold;',
         ''
       );
@@ -595,14 +482,10 @@ function captureInteractiveElements(options = {}) {
       return results;
     };
 
-    // Use a delay to ensure iframes have loaded
     if (document.readyState === 'complete') {
-      // Small delay to ensure all iframes are loaded
-      setTimeout(runDetection, 1000);
+      runDetection();
     } else {
-      window.addEventListener('load', () => {
-        setTimeout(runDetection, 1000);
-      });
+      document.addEventListener('DOMContentLoaded', runDetection);
     }
   } catch (error) {
     console.error('Element Detection Error:', error);

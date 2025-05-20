@@ -51,7 +51,31 @@ function captureInteractiveElements(options = {}) {
   }
 
   // --- Core Functions ---
-  function getXPath(element) {
+  function getXPath(element, doc = document) {
+    // For elements in iframes, we need to consider the iframe too
+    if (doc !== document) {
+      // Find the parent iframe
+      const iframes = Array.from(document.querySelectorAll('iframe'));
+      for (const iframe of iframes) {
+        try {
+          if (iframe.contentDocument === doc) {
+            // Get the iframe's XPath
+            const iframePath = getXPath(iframe);
+            // Get the element's XPath within the iframe
+            const elementPath = getXPathInternal(element, doc);
+            // Combine them
+            return `${elementPath}`;
+          }
+        } catch (e) {
+          // Skip iframes we can't access due to same-origin policy
+          console.warn("Cannot access iframe content due to same-origin policy", e);
+        }
+      }
+    }
+    return getXPathInternal(element, doc);
+  }
+
+  function getXPathInternal(element, doc) {
     if (element.id) return `//*[@id="${element.id}"]`;
     const parts = [];
     let current = element;
@@ -60,7 +84,7 @@ function captureInteractiveElements(options = {}) {
         .filter(e => e.tagName === current.tagName)
         .indexOf(current) + 1;
       parts.unshift(
-        index > 1
+        index > 0
           ? `${current.tagName.toLowerCase()}[${index}]`
           : current.tagName.toLowerCase()
       );
@@ -85,7 +109,8 @@ function captureInteractiveElements(options = {}) {
       'select',
       'textarea',
       'summary',
-      'video'
+      'video',
+      'iframe' // Keep iframe in the list for iframe detection
     ]);
     const role = element.getAttribute('role')?.toLowerCase() || '';
     const interactiveRoles = new Set([
@@ -219,6 +244,7 @@ function captureInteractiveElements(options = {}) {
     if (element.isContentEditable) return 'rich-text-editor';
     if (tag === 'a' && element.href) return 'link';
     if (tag === 'video') return 'video-player';
+    if (tag === 'iframe') return 'iframe';
 
     // --- Final Fallback ---
     // If nothing specific was determined and the tag is simply 'div' or 'a',
@@ -237,7 +263,14 @@ function captureInteractiveElements(options = {}) {
     return finalType;
   }
 
-  function getElementText(element, type) {
+  function getElementText(element, type, doc = document) {
+    // Special handling for iframes - get title or name attribute
+    if (type === 'iframe') {
+      return element.getAttribute('title')?.trim() ||
+             element.getAttribute('name')?.trim() ||
+             element.getAttribute('src')?.trim() || '';
+    }
+
     // Prioritize visible text
     const visibleText = element.textContent.trim().replace(/\s+/g, ' ');
     if (visibleText) return visibleText;
@@ -246,7 +279,7 @@ function captureInteractiveElements(options = {}) {
     if (type.endsWith('-input') || ['checkbox', 'radio', 'dropdown'].includes(type)) {
       const id = element.id;
       if (id) {
-        const label = document.querySelector(`label[for="${id}"]`);
+        const label = doc.querySelector(`label[for="${id}"]`);
         if (label) return label.textContent.trim();
       }
     }
@@ -259,18 +292,31 @@ function captureInteractiveElements(options = {}) {
     // ARIA labels
     const labelledBy = element.getAttribute('aria-labelledby');
     if (labelledBy) {
-      const refElement = document.getElementById(labelledBy);
+      const refElement = doc.getElementById(labelledBy);
       if (refElement) return refElement.textContent.trim();
     }
 
     return '';
   }
 
-  function getElementDescription(element, type) {
+  function getElementDescription(element, type, doc = document) {
+    // Special handling for iframes
+    if (type === 'iframe') {
+      const title = element.getAttribute('title')?.trim();
+      const src = element.getAttribute('src')?.trim();
+      const name = element.getAttribute('name')?.trim();
+
+      return `Iframe: ${title || name || 'Embedded content'}${src ? ` (${src.split('?')[0]})` : ''}`;
+    }
+
     // Base information
     const ariaLabel = element.getAttribute('aria-label')?.trim();
     const title = element.getAttribute('title')?.trim();
-    const baseText = ariaLabel || title || getElementText(element, type);
+    const baseText = ariaLabel || title || getElementText(element, type, doc);
+
+    // For iframe content elements, add a prefix
+    const inIframe = doc !== document;
+    const iframePrefix = inIframe ? '[In iframe] ' : '';
 
     // State tracking
     const states = [];
@@ -287,58 +333,60 @@ function captureInteractiveElements(options = {}) {
         element.closest('label')?.textContent.trim() ||
         inputType;
 
-      return `${statePrefix}${inputType.replace(/\b\w/g, l => l.toUpperCase())} field${placeholder ? `: ${placeholder}` : ''}${label ? ` (${label})` : ''}`;
+      return `${iframePrefix}${statePrefix}${inputType.replace(/\b\w/g, l => l.toUpperCase())} field${placeholder ? `: ${placeholder}` : ''}${label ? ` (${label})` : ''}`;
     }
 
     switch (type) {
       case 'menu-container':
-        return `${statePrefix}Menu: ${baseText || 'Context options'}`;
+        return `${iframePrefix}${statePrefix}Menu: ${baseText || 'Context options'}`;
 
       case 'menu-item':
         const menuParent = element.closest('[role="menu"], [role="menubar"]');
         const menuLabel = menuParent?.getAttribute('aria-label') || '';
-        return `${statePrefix}Menu option${menuLabel ? ` in ${menuLabel}` : ''}: ${baseText}`;
+        return `${iframePrefix}${statePrefix}Menu option${menuLabel ? ` in ${menuLabel}` : ''}: ${baseText}`;
 
       case 'doc-menu-item':
         const menuPath = Array.from(element.closest('[role="menu"]')?.querySelectorAll('[role="menuitem"]') || [])
           .map(item => item.textContent.trim())
           .join(' ▸ ');
-        return `${statePrefix}Document menu: ${menuPath}`;
+        return `${iframePrefix}${statePrefix}Document menu: ${menuPath}`;
 
       case 'doc-toolbar-button':
         const toolbar = element.closest('[role="toolbar"]');
         const toolbarLabel = toolbar?.getAttribute('aria-label') || 'Document tools';
-        return `${statePrefix}${toolbarLabel}: ${baseText}`;
+        return `${iframePrefix}${statePrefix}${toolbarLabel}: ${baseText}`;
 
       case 'list-container':
-        return `${statePrefix}List: ${baseText || 'Selectable items'}`;
+        return `${iframePrefix}${statePrefix}List: ${baseText || 'Selectable items'}`;
 
       case 'list-item':
         const listParent = element.closest('[role="listbox"]');
         const listLabel = listParent?.getAttribute('aria-label') || '';
-        return `${statePrefix}List item${listLabel ? ` in ${listLabel}` : ''}: ${baseText}`;
+        return `${iframePrefix}${statePrefix}List item${listLabel ? ` in ${listLabel}` : ''}: ${baseText}`;
 
       case 'toolbar-button':
         const toolbarParent = element.closest('[role="toolbar"]');
         const toolbarParentLabel = toolbarParent?.getAttribute('aria-label') || '';
-        return `${statePrefix}Toolbar button${toolbarParentLabel ? ` in ${toolbarParentLabel}` : ''}: ${baseText}`;
+        return `${iframePrefix}${statePrefix}Toolbar button${toolbarParentLabel ? ` in ${toolbarParentLabel}` : ''}: ${baseText}`;
 
       case 'expandable-section':
         const expandedState = element.getAttribute('aria-expanded') === 'true' ? 'expanded' : 'collapsed';
-        return `${statePrefix}Expandable section (${expandedState}): ${baseText}`;
+        return `${iframePrefix}${statePrefix}Expandable section (${expandedState}): ${baseText}`;
 
       default:
-        return `${statePrefix}${type.replace(/-/g, ' ')}${baseText ? `: ${baseText}` : ''}`;
+        return `${iframePrefix}${statePrefix}${type.replace(/-/g, ' ')}${baseText ? `: ${baseText}` : ''}`;
     }
   }
 
   // --- Modified Highlight Function ---
-  function highlightElement(element, index) {
+  function highlightElement(element, index, iframeOffset = { x: 0, y: 0 }) {
     if (!DEBUG_HIGHLIGHT || !highlightContainer) return;
 
     // Determine type and description for the overlay label.
     const type = getElementType(element);
-    const description = getElementDescription(element, type);
+    const doc = element.ownerDocument;
+    const inIframe = doc !== document;
+    const description = getElementDescription(element, type, doc);
 
     // Define an array of important keywords for button text.
     const importantKeywords = ['login', 'submit', 'done', 'search'];
@@ -357,6 +405,15 @@ function captureInteractiveElements(options = {}) {
         }
       }
     }
+    // Always show full text for iframes
+    else if (type === 'iframe') {
+      showFullText = true;
+    }
+    // Always show full text for iframe content
+    else if (inIframe) {
+      showFullText = true;
+    }
+
     // Create a top label that shows only the index.
     const topLabelText = `${index}`;
     // Create a bottom label text only if showFullText is true.
@@ -367,13 +424,17 @@ function captureInteractiveElements(options = {}) {
       // Choose a color from our palette.
       const color = highlightColors[index % highlightColors.length];
 
+      // Adjust position for iframe elements
+      const rectTop = rect.top + window.scrollY + iframeOffset.y;
+      const rectLeft = rect.left + window.scrollX + iframeOffset.x;
+
       // Reduce the overlay box size slightly to avoid visual clutter.
       Object.assign(overlay.style, {
         position: 'absolute',
         border: `1px dashed ${color}`,
         backgroundColor: `${color}10`, // very light background
-        top: `${rect.top + window.scrollY + 2}px`,
-        left: `${rect.left + window.scrollX + 2}px`,
+        top: `${rectTop + 2}px`,
+        left: `${rectLeft + 2}px`,
         width: `${rect.width - 4}px`,
         height: `${rect.height - 4}px`,
         pointerEvents: 'none'
@@ -425,8 +486,65 @@ function captureInteractiveElements(options = {}) {
     });
   }
 
+  // --- Process elements within an iframe ---
+  function processIframeContent(iframe, capturedElements) {
+    try {
+      // Try to access iframe content - may fail due to cross-origin restrictions
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+
+      if (!iframeDoc) {
+        console.warn('Cannot access iframe content due to same-origin restrictions:', iframe.src);
+        return;
+      }
+
+      // Calculate iframe offset for highlighting
+      const iframeRect = iframe.getBoundingClientRect();
+      const iframeOffset = {
+        x: iframeRect.left,
+        y: iframeRect.top
+      };
+
+      // Create a tree walker for the iframe document
+      const iframeWalker = iframeDoc.createTreeWalker(
+        iframeDoc.body,
+        NodeFilter.SHOW_ELEMENT,
+        { acceptNode: node => isInteractiveElement(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP }
+      );
+
+      // Process each interactive element in the iframe
+      while (iframeWalker.nextNode()) {
+        const current = iframeWalker.currentNode;
+        if (!capturedElements.some(el => el.element === current)) {
+          capturedElements.push({
+            element: current,
+            document: iframeDoc,
+            iframe: iframe,
+            iframeOffset: iframeOffset
+          });
+          highlightElement(current, elementIndex, iframeOffset);
+          elementIndex++;
+        }
+      }
+
+      // Recursively process nested iframes
+      const nestedIframes = Array.from(iframeDoc.querySelectorAll('iframe'));
+      for (const nestedIframe of nestedIframes) {
+        // Adjust offset for nested iframes
+        const nestedOffset = {
+          x: iframeOffset.x + nestedIframe.getBoundingClientRect().left,
+          y: iframeOffset.y + nestedIframe.getBoundingClientRect().top
+        };
+        processIframeContent(nestedIframe, capturedElements);
+      }
+    } catch (error) {
+      console.warn('Error accessing iframe content:', error);
+    }
+  }
+
   // --- Element Collection ---
   const capturedElements = [];
+
+  // First, process main document
   const walker = document.createTreeWalker(
     document.body,
     NodeFilter.SHOW_ELEMENT,
@@ -435,28 +553,67 @@ function captureInteractiveElements(options = {}) {
 
   while (walker.nextNode()) {
     const current = walker.currentNode;
-    if (!capturedElements.some(el => el.contains(current))) {
-      capturedElements.push(current);
+    // Skip if this element is already contained by another captured element
+    if (!capturedElements.some(item => item.element && item.element.contains(current))) {
+      capturedElements.push({
+        element: current,
+        document: document,
+        iframe: null,
+        iframeOffset: { x: 0, y: 0 }
+      });
       highlightElement(current, elementIndex);
       elementIndex++;
     }
   }
 
+  // Then, process each iframe
+  const iframes = Array.from(document.querySelectorAll('iframe'));
+  for (const iframe of iframes) {
+    processIframeContent(iframe, capturedElements);
+  }
+
   // --- Coordinate Calculation ---
-  const result = capturedElements.map((el, idx) => {
-    const rects = Array.from(el.getClientRects());
-    const type = getElementType(el);
-    const primaryRect = rects[0] || el.getBoundingClientRect();
+  const result = capturedElements.map((item, idx) => {
+    const { element, document: doc, iframeOffset } = item;
+    const rects = Array.from(element.getClientRects());
+    const type = getElementType(element);
+    const primaryRect = rects[0] || element.getBoundingClientRect();
+    const inIframe = doc !== document;
+
+    // Calculate coordinates, adjusting for iframe position if needed
+    const x = Math.round(primaryRect.left + primaryRect.width / 2 + window.scrollX + iframeOffset.x);
+    const y = Math.round(primaryRect.top + primaryRect.height / 2 + window.scrollY + iframeOffset.y);
+
+    // For iframe content elements, check if they're in viewport relative to the iframe
+    let inViewport = false;
+    if (inIframe) {
+      // First check if iframe itself is in viewport
+      const containingIframe = item.iframe;
+      const iframeInViewport = isElementInViewport(containingIframe);
+      if (iframeInViewport) {
+        // Then check if element is in the iframe's viewport
+        const rect = element.getBoundingClientRect();
+        inViewport = (
+          rect.top >= 0 &&
+          rect.left >= 0 &&
+          rect.bottom <= containingIframe.clientHeight &&
+          rect.right <= containingIframe.clientWidth
+        );
+      }
+    } else {
+      inViewport = isElementInViewport(element);
+    }
 
     return {
       index: idx,
       type: type,
-      xpath: getXPath(el),
-      description: getElementDescription(el, type),
-      text: getElementText(el, type),
-      x: Math.round(primaryRect.left + primaryRect.width / 2 + window.scrollX),
-      y: Math.round(primaryRect.top + primaryRect.height / 2 + window.scrollY),
-      inViewport: isElementInViewport(el) // Added inViewport flag
+      xpath: getXPath(element, doc),
+      description: getElementDescription(element, type, doc),
+      text: getElementText(element, type, doc),
+      x: x,
+      y: y,
+      inViewport: inViewport,
+      inIframe: inIframe
     };
   });
 

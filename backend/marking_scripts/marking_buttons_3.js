@@ -3,6 +3,7 @@ function captureInteractiveElements(options = {}) {
   const highlightColors = ['#FF0000', '#00FF00', '#0000FF', '#FFA500'];
   let elementIndex = 0;
   let highlightContainer = null;
+  let capturedElements = [];
 
   // --- PDF Detection ---
   const url = window.location.href.toLowerCase();
@@ -39,8 +40,8 @@ function captureInteractiveElements(options = {}) {
     document.body.appendChild(highlightContainer);
   }
 
-   // --- Helper Function: Check if Element is in Viewport ---
-   function isElementInViewport(el) {
+  // --- Helper Function: Check if Element is in Viewport ---
+  function isElementInViewport(el) {
     const rect = el.getBoundingClientRect();
     return (
       rect.top >= 0 &&
@@ -51,18 +52,10 @@ function captureInteractiveElements(options = {}) {
   }
 
   // --- Core Functions ---
-  function getXPath(element, frameContext = null) {
-    // If the element is in an iframe, start with iframe's xpath
-    let prefix = '';
-    if (frameContext && frameContext.frameElement) {
-      prefix = '';
-    }
-
-    if (element.id) return `${prefix}//*[@id="${element.id}"]`;
-
+  function getXPath(element, frameInfo = '') {
+    if (element.id) return `//*[@id="${element.id}"]`;
     const parts = [];
     let current = element;
-
     while (current && current.nodeType === Node.ELEMENT_NODE) {
       let index = Array.from(current.parentNode.children)
         .filter(e => e.tagName === current.tagName)
@@ -74,8 +67,7 @@ function captureInteractiveElements(options = {}) {
       );
       current = current.parentNode;
     }
-
-    return parts.length ? `${prefix}/${parts.join('/')}` : '';
+    return parts.length ? `${parts.join('/')}` : '';
   }
 
   function isInteractiveElement(element) {
@@ -137,12 +129,17 @@ function captureInteractiveElements(options = {}) {
         return 'search-input';
       }
 
-      // Standard input types
+      // For input buttons, check if the button's value is purely numeric.
       switch (inputType) {
         case 'button':
         case 'submit':
-        case 'reset':
+        case 'reset': {
+          const val = (element.value || "").trim();
+          if (val && /^\d+$/.test(val)) {
+            return 'date-button';
+          }
           return 'button';
+        }
         case 'checkbox':
           return 'checkbox';
         case 'radio':
@@ -210,6 +207,11 @@ function captureInteractiveElements(options = {}) {
       return element.href ? 'icon-link' : 'icon-button';
     }
     if (tag === 'button' || role === 'button') {
+      // For native <button> elements, check their text content.
+      const btnText = element.textContent.trim();
+      if (btnText && /^\d+$/.test(btnText)) {
+        return 'date-button';
+      }
       return isIconContainer ? 'icon-button' : 'button';
     }
     // Modified textarea handling:
@@ -325,86 +327,53 @@ function captureInteractiveElements(options = {}) {
   }
 
   // --- Modified Highlight Function ---
-  // For each input-type element, a top label shows the index above the marking box.
-  // A bottom label is always displayed below the box showing the associated descriptive text.
-  function highlightElement(element, index, frameContext = null) {
+  function highlightElement(element, index, frameRect = null) {
     if (!DEBUG_HIGHLIGHT || !highlightContainer) return;
 
     const type = getElementType(element);
     const description = getElementDescription(element, type);
 
     const topLabelText = `${index}`;
-    const bottomLabelText = description; // Always show descriptive text for input elements
+    const bottomLabelText = description;
 
-    // Get element rect relative to the top document
-    const getAbsoluteRect = (el, context) => {
-      const rect = el.getBoundingClientRect();
+    // Get element's rects relative to its own document
+    const elementRects = Array.from(element.getClientRects());
 
-      // Start with the element's rect
-      let absoluteRect = {
-        top: rect.top,
-        left: rect.left,
-        width: rect.width,
-        height: rect.height
-      };
-
-      // If it's in an iframe, adjust position
-      if (context && context.frameElement) {
-        const frameRect = context.frameElement.getBoundingClientRect();
-        absoluteRect.top += frameRect.top;
-        absoluteRect.left += frameRect.left;
+    elementRects.forEach(rect => {
+      // If this element is in an iframe, adjust its coordinates
+      let adjustedRect = { ...rect };
+      if (frameRect) {
+        adjustedRect = {
+          top: rect.top + frameRect.top,
+          left: rect.left + frameRect.left,
+          bottom: rect.bottom + frameRect.top,
+          right: rect.right + frameRect.left,
+          width: rect.width,
+          height: rect.height
+        };
       }
 
-      // Add scroll offset of the main document
-      absoluteRect.top += window.scrollY;
-      absoluteRect.left += window.scrollX;
+      const overlay = document.createElement('div');
+      const color = highlightColors[index % highlightColors.length];
 
-      return absoluteRect;
-    };
-
-    const abRect = getAbsoluteRect(element, frameContext);
-
-    const overlay = document.createElement('div');
-    const color = highlightColors[index % highlightColors.length];
-
-    Object.assign(overlay.style, {
-      position: 'absolute',
-      border: `1px dashed ${color}`,
-      backgroundColor: `${color}10`,
-      top: `${abRect.top + 2}px`,
-      left: `${abRect.left + 2}px`,
-      width: `${abRect.width - 4}px`,
-      height: `${abRect.height - 4}px`,
-      pointerEvents: 'none'
-    });
-
-    // Top label: displays only the index above the box.
-    const topLabel = document.createElement('div');
-    topLabel.textContent = topLabelText;
-    Object.assign(topLabel.style, {
-      position: 'absolute',
-      top: '-16px',
-      left: '0',
-      background: color + '80',
-      color: 'white',
-      padding: '1px 3px',
-      borderRadius: '2px',
-      fontSize: '10px',
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      lineHeight: '1',
-      textShadow: '1px 1px 2px rgba(0,0,0,0.8)'
-    });
-    overlay.appendChild(topLabel);
-
-    // Bottom label: displays the descriptive text below the box.
-    if (bottomLabelText) {
-      const bottomLabel = document.createElement('div');
-      bottomLabel.textContent = bottomLabelText;
-      Object.assign(bottomLabel.style, {
+      Object.assign(overlay.style, {
         position: 'absolute',
-        bottom: '-16px',
+        border: `1px dashed ${color}`,
+        backgroundColor: `${color}10`,
+        top: `${adjustedRect.top + window.scrollY + 2}px`,
+        left: `${adjustedRect.left + window.scrollX + 2}px`,
+        width: `${adjustedRect.width - 4}px`,
+        height: `${adjustedRect.height - 4}px`,
+        pointerEvents: 'none',
+        zIndex: '2147483647'
+      });
+
+      // Top label: shows only the index above the box.
+      const topLabel = document.createElement('div');
+      topLabel.textContent = topLabelText;
+      Object.assign(topLabel.style, {
+        position: 'absolute',
+        top: '-16px',
         left: '0',
         background: color + '80',
         color: 'white',
@@ -415,55 +384,47 @@ function captureInteractiveElements(options = {}) {
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         lineHeight: '1',
-        textShadow: '1px 1px 2px rgba(0,0,0,0.8)'
+        textShadow: '1px 1px 2px rgba(0,0,0,0.8)',
+        zIndex: '2147483647'
       });
-      overlay.appendChild(bottomLabel);
-    }
+      overlay.appendChild(topLabel);
 
-    highlightContainer.appendChild(overlay);
-  }
-
-  // --- New Function to Safely Access Iframe Content ---
-  function safelyAccessIframe(iframe) {
-    try {
-      // Try to access the iframe's contentWindow
-      const iframeWindow = iframe.contentWindow;
-
-      // Check if we can access the document
-      if (iframeWindow && iframeWindow.document) {
-        return iframeWindow;
+      // Bottom label: shows the associated descriptive text below the box.
+      if (bottomLabelText) {
+        const bottomLabel = document.createElement('div');
+        bottomLabel.textContent = bottomLabelText;
+        Object.assign(bottomLabel.style, {
+          position: 'absolute',
+          bottom: '-16px',
+          left: '0',
+          background: color + '80',
+          color: 'white',
+          padding: '1px 3px',
+          borderRadius: '2px',
+          fontSize: '10px',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          lineHeight: '1',
+          textShadow: '1px 1px 2px rgba(0,0,0,0.8)',
+          zIndex: '2147483647'
+        });
+        overlay.appendChild(bottomLabel);
       }
-    } catch (e) {
-      console.warn(`Cannot access iframe content due to same-origin policy: ${e.message}`);
-    }
-    return null;
+
+      highlightContainer.appendChild(overlay);
+    });
   }
 
-  // --- Modified Element Collection ---
-  // Define the set of accepted input types
-  const inputTypes = new Set([
-    'text-input',
-    'search-input',
-    'checkbox',
-    'radio',
-    'email-input',
-    'password-input',
-    'number-input',
-    'date-input',
-    'time-input',
-    'phone-input',
-    'url-input',
-    'range-input',
-    'color-input',
-    'file-input',
-    'text-area',
-    'dropdown'  // Added to capture select elements
-  ]);
+  // --- Process a document (main or iframe) ---
+  function processDocument(doc, frameElement = null) {
+    // Calculate iframe position if this is an iframe document
+    let frameRect = null;
+    if (frameElement) {
+      frameRect = frameElement.getBoundingClientRect();
+    }
 
-  // Function to process elements using a tree walker
-  function processDocumentWithWalker(doc, frameContext = null) {
-    const elements = [];
-
+    // Create a TreeWalker to find interactive elements
     const walker = doc.createTreeWalker(
       doc.body,
       NodeFilter.SHOW_ELEMENT,
@@ -471,110 +432,113 @@ function captureInteractiveElements(options = {}) {
         acceptNode: node => {
           if (!isInteractiveElement(node)) return NodeFilter.FILTER_SKIP;
           const type = getElementType(node);
-          return inputTypes.has(type)
+          // Only accept if the type is exactly 'button' or 'icon-button'
+          return (type === 'button' || type === 'icon-button')
             ? NodeFilter.FILTER_ACCEPT
             : NodeFilter.FILTER_SKIP;
         }
       }
     );
 
+    // Collect elements from this document
+    const docElements = [];
     while (walker.nextNode()) {
       const current = walker.currentNode;
-      if (!elements.some(el => el.contains(current))) {
-        elements.push(current);
-        highlightElement(current, elementIndex, frameContext);
-        elementIndex++;
+      if (!docElements.some(el => el.contains(current))) {
+        docElements.push(current);
       }
     }
 
-    return elements;
-  }
+    // Get iframe path part for XPath
+    const framePathPart = frameElement ? `iframe[${Array.from(frameElement.parentNode.children).filter(el => el.tagName === 'IFRAME').indexOf(frameElement) + 1}]` : '';
 
-  // Process iframe contents
-  function processIframes(doc = document) {
-    let allElements = [];
+    // Add elements to the global list and highlight them
+    docElements.forEach(el => {
+      highlightElement(el, elementIndex, frameRect);
 
-    // Get all iframe elements in the document
-    const iframes = doc.querySelectorAll('iframe');
-
-    // First process the main document
-    const mainDocElements = processDocumentWithWalker(doc);
-    allElements = allElements.concat(mainDocElements);
-
-    // Then process each iframe
-    iframes.forEach(iframe => {
-      const frameWindow = safelyAccessIframe(iframe);
-      if (frameWindow) {
-        try {
-          // Process the iframe document
-          const frameElements = processDocumentWithWalker(frameWindow.document, frameWindow);
-          allElements = allElements.concat(frameElements.map(el => ({ element: el, frameContext: frameWindow })));
-
-          // Recursively process nested iframes
-          const nestedFrameElements = processIframes(frameWindow.document);
-          allElements = allElements.concat(nestedFrameElements);
-        } catch (e) {
-          console.warn(`Error processing iframe: ${e.message}`);
-        }
-      }
-    });
-
-    return allElements;
-  }
-
-  // --- Collect Elements ---
-  const capturedElements = processIframes();
-
-  // --- Map Elements to Result Objects ---
-  const result = capturedElements.map((item, idx) => {
-    const el = item.element || item;
-    const frameContext = item.frameContext;
-
-    // Calculate the absolute position (relative to top document)
-    let x = 0, y = 0;
-
-    try {
+      // Calculate coordinates based on frame position if needed
       const rect = el.getBoundingClientRect();
-      x = rect.left + (rect.width / 2);
-      y = rect.top + (rect.height / 2);
+      let x = Math.round(rect.left + rect.width / 2);
+      let y = Math.round(rect.top + rect.height / 2);
 
-      if (frameContext && frameContext.frameElement) {
-        const frameRect = frameContext.frameElement.getBoundingClientRect();
+      if (frameRect) {
         x += frameRect.left;
         y += frameRect.top;
       }
 
-      // Add scroll position
       x += window.scrollX;
       y += window.scrollY;
 
-      x = Math.round(x);
-      y = Math.round(y);
-    } catch (e) {
-      console.warn(`Error calculating position: ${e.message}`);
-    }
+      const type = getElementType(el);
 
-    const type = getElementType(el);
+      capturedElements.push({
+        index: elementIndex,
+        type: type,
+        xpath: getXPath(el, framePathPart),
+        description: getElementDescription(el, type),
+        text: getElementText(el, type),
+        x: x,
+        y: y,
+        inViewport: isElementInViewport(el),
+        fromIframe: !!frameElement,
+        iframeTitle: frameElement ? frameElement.getAttribute('title') || '' : ''
+      });
 
-    return {
-      index: idx,
-      type: type,
-      xpath: getXPath(el, frameContext),
-      description: getElementDescription(el, type),
-      text: getElementText(el, type),
-      x: x,
-      y: y,
-      inViewport: frameContext ? isElementInViewport(frameContext.frameElement) : isElementInViewport(el),
-      // Add reference to the frame if applicable
-      frameInfo: frameContext ? {
-        src: frameContext.frameElement.getAttribute('src') || frameContext.frameElement.getAttribute('iframesrc') || '',
-        title: frameContext.frameElement.getAttribute('title') || ''
-      } : null
-    };
-  });
+      elementIndex++;
+    });
 
-  console.log('Interactive Elements:', result);
-  return result;
+    // Return the count of elements found
+    return docElements.length;
+  }
+
+  // --- Process all iframes recursively ---
+  function processIframes(doc = document) {
+    const iframes = doc.querySelectorAll('iframe');
+    let totalIframeElements = 0;
+
+    iframes.forEach(iframe => {
+      try {
+        // Try to access the iframe's content document
+        const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+
+        // If we can access it, process it
+        if (iframeDoc) {
+          console.log(`Processing iframe: ${iframe.getAttribute('title') || iframe.getAttribute('src') || 'Unnamed iframe'}`);
+
+          // Process the document itself
+          const elementsFound = processDocument(iframeDoc, iframe);
+          totalIframeElements += elementsFound;
+
+          // Recursively process nested iframes
+          totalIframeElements += processIframes(iframeDoc);
+        } else {
+          console.warn(`Cannot access iframe content (likely cross-origin): ${iframe.getAttribute('src') || 'No src'}`);
+        }
+      } catch (error) {
+        console.warn(`Error accessing iframe: ${error.message}`);
+      }
+    });
+
+    return totalIframeElements;
+  }
+
+  // --- Entry point: process main document and all iframes ---
+  function processAll() {
+    // First process the main document
+    const mainDocElements = processDocument(document);
+    console.log(`Found ${mainDocElements} button elements in main document`);
+
+    // Then process all accessible iframes
+    const iframeElements = processIframes();
+    console.log(`Found ${iframeElements} button elements in iframes`);
+
+    return capturedElements;
+  }
+
+  // Run the detection
+  const results = processAll();
+  console.log('Detection complete. Total:', results.length, 'button elements found');
+  return results;
 }
 
 // --- Execution Handler ---
@@ -582,12 +546,12 @@ function captureInteractiveElements(options = {}) {
   try {
     const runDetection = () => {
       console.clear();
-      console.log('Starting intelligent element detection (including iframe content)...');
+      console.log('Starting intelligent element detection (buttons only) with iframe support...');
       const results = captureInteractiveElements({ debugHighlight: true });
       console.log(
         'Detection complete. Found %c' +
           results.length +
-          '%c input elements',
+          '%c button elements (including inside iframes)',
         'color: #4CAF50; font-weight: bold;',
         ''
       );
@@ -595,14 +559,10 @@ function captureInteractiveElements(options = {}) {
       return results;
     };
 
-    // Use a delay to ensure iframes have loaded
     if (document.readyState === 'complete') {
-      // Small delay to ensure all iframes are loaded
-      setTimeout(runDetection, 1000);
+      runDetection();
     } else {
-      window.addEventListener('load', () => {
-        setTimeout(runDetection, 1000);
-      });
+      document.addEventListener('DOMContentLoaded', runDetection);
     }
   } catch (error) {
     console.error('Element Detection Error:', error);

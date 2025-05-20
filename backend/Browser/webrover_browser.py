@@ -59,7 +59,7 @@ class WebRoverBrowser:
                     async with session.get("http://127.0.0.1:9222/json/version") as response:
                         data = await response.json()
                         ws_endpoint = data.get('webSocketDebuggerUrl')
-                
+
                 if not ws_endpoint:
                     raise RuntimeError("Could not get WebSocket debugger URL")
                 
@@ -77,7 +77,6 @@ class WebRoverBrowser:
                     raise RuntimeError("No browser contexts available after connection")
                 self._context = contexts[0]
                 print("Context: ", self._context)
-                
                 print("Successfully connected to Chrome")
                 return self._browser, self._context
             
@@ -101,8 +100,12 @@ class WebRoverBrowser:
             f"--remote-debugging-port=9222",
             "--no-first-run",
             "--no-default-browser-check",
+            "--user-data-dir=C:\\Temp\\ChromeDebugProfile",  # Required
             "--start-maximized",
+            "--lang=en-US",  # Forces English language
+            "--remote-debugging-address=0.0.0.0"
         ]
+        print("Launching Chrome with:", " ".join(cmd))
 
         if self.headless:
             cmd.append("--headless=new")
@@ -114,14 +117,14 @@ class WebRoverBrowser:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             print("Waiting for Chrome to start and verify port is listening")
             # Wait for Chrome to start and verify port is listening
             for _ in range(10):  # Try for 10 seconds
                 await asyncio.sleep(1)
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    result = sock.connect_ex(('127.0.0.1', 9222))
+                    result = sock.connect_ex(('localhost', 9222))
                     sock.close()
                     if result == 0:
                         print("Chrome started successfully with remote debugging port")
@@ -130,7 +133,6 @@ class WebRoverBrowser:
                     continue
             
             raise RuntimeError("Chrome failed to start with remote debugging port")
-            
         except Exception as e:
             print(f"Error launching Chrome: {e}")
             if process:

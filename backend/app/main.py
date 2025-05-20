@@ -7,10 +7,10 @@ from contextlib import asynccontextmanager
 import json
 import time
 # Import necessary functions from agent files
-from .task_agent import task_agent
-from .research_agent import research_agent, type
-from .deep_research_agent import deep_research_agent
-from .browser_manager import setup_browser, cleanup_browser_session
+from backend.app.task_agent import task_agent
+from backend.app.research_agent import research_agent, type
+from backend.app.deep_research_agent import deep_research_agent
+from backend.app.browser_manager import setup_browser, cleanup_browser_session
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -160,8 +160,9 @@ async def stream_task_agent_response(query: str, page, agent_graph):
                                                   "interact_with_link_elements"]):
                         actions = event[list(event.keys())[0]]["actions"]["element_actions"]
                         actions_json = json.dumps(actions, ensure_ascii=False)
-                        yield f"data: {{\n  \"type\": \"interaction\",\n  \"content\": {actions_json}\n}}\n\n"
-                    
+                        # yield f"data: {{\n  \"type\": \"interaction\",\n  \"content\": {actions_json}\n}}\n\n"
+                        yield f"data: {{\n  \"type\": \"interaction\",\n  \"content\": interacting with elements\n}}\n\n"
+
                     # Stream browser actions
                     if any(key in event for key in ["click", "type", "wait", "go_back", "go_to_search"]):
                         actions = event[list(event.keys())[0]]["actions_taken"]

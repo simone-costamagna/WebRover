@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 import os
-from Browser.webrover_browser import WebRoverBrowser  
+from backend.Browser.webrover_browser import WebRoverBrowser
 from typing import TypedDict, List, Annotated, Literal, Optional
 from operator import add
 from playwright.async_api import Page, Locator
@@ -12,9 +12,12 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 import asyncio
 import platform
-
 from IPython.display import Image, display
 from langgraph.graph import StateGraph, START, END
+
+load_dotenv()
+
+IVECO_PLATFORM = os.getenv("IVECO_PLATFORM")
 
 
 
@@ -39,8 +42,8 @@ class DomElement(TypedDict):
 
 class Action(TypedDict):
     thought: str
-    action_type : Literal["click", "type"]
-    args: str
+    action_type: Literal["click", "type"]
+    args: Annotated[str, ..., "The text to write inside the input field or the text to select from a dropdown"]
     action_element: DomElement
 
 class Actions(TypedDict):
@@ -48,7 +51,7 @@ class Actions(TypedDict):
 
 class DecideAction(TypedDict):
     thought: str
-    step: Literal["decide_url", "get_all_elements", "get_all_input_elements", "get_all_button_elements", "get_all_link_elements", "go_back", "go_to_search", "respond", "wait" , "type_in_text_editor"]
+    step: Literal["go_to_platform", "get_all_elements", "get_all_input_elements", "get_all_button_elements", "get_all_link_elements", "go_back", "go_to_search", "respond", "wait" , "type_in_text_editor"]
 
 
 class AgentState(TypedDict):
@@ -77,13 +80,14 @@ vars = ["OPENAI_API_KEY", "LANGCHAIN_API_KEY", "LANGCHAIN_TRACING_V2", "LANGCHAI
 for var in vars:
     set_env_vars(var)
 
-llm_4o = ChatOpenAI(model="gpt-4o", temperature=0)
+llm_4_1 = ChatOpenAI(model="gpt-4.1", temperature=0)
+llm_o4_mini = ChatOpenAI(model="o4-mini")
 llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 llm_o3_mini = ChatOpenAI(model="o3-mini", reasoning_effort="high")
 
 llm_anthropic = ChatAnthropic(model="claude-3-5-sonnet-20240620", temperature=0)
 llm_openai_o1 = ChatOpenAI(model="o1-preview", temperature=1)
-llm = llm_4o
+llm = llm_4_1
 
   
 
@@ -107,7 +111,7 @@ async def setup_browser(go_to_page: str):
 
 # Decide URL Node
 
-async def decide_url(state: AgentState):
+async def go_to_platform(state: AgentState):
     input = state["input"]
 
     system_message = """
@@ -133,12 +137,8 @@ async def decide_url(state: AgentState):
 
     Note: While returning the url, return the url in the format of the url and no text associated with it.
     """
-
-    human_prompt = """
-    This is the task provided by the user: {input}
-    This is the conversation history: {conversation_history}
-    This is the current page url: {page_url}
     """
+    human_prompt = "This is the task provided by the user: {input}\nThis is the conversation history: {conversation_history}\nThis is the current page url: {page_url}"
 
     input = state["input"]
     conversation_history = state.get("chat_history", [])
@@ -156,13 +156,42 @@ async def decide_url(state: AgentState):
     print(response)
 
     page = state["page"]
-   
 
     if response.url == "NO_CHANGE":
         return {"page": page , "actions_taken": ["No change in the url, so I will continue with the same url"]}
     else:
         await page.goto(response.url)
         return { "page": page , "actions_taken": [f"Navigated to the {response.url}"]}
+    """
+    """
+    human_prompt = "This is the task provided by the user: {input}\nThis is the conversation history: {conversation_history}\nThis is the current page url: {page_url}"
+
+    input = state["input"]
+    conversation_history = state.get("chat_history", [])
+    page = state["page"]
+
+    human_message = human_prompt.format(input=input, conversation_history=conversation_history, page_url=page.url)
+
+    messages = [
+        SystemMessage(content=system_message),
+        HumanMessage(content=human_message)
+    ]
+
+    structured_llm = llm_mini.with_structured_output(Url)
+    response = structured_llm.invoke(messages)
+    print(response)
+
+    page = state["page"]
+
+    if response.url == "NO_CHANGE":
+        return {"page": page , "actions_taken": ["No change in the url, so I will continue with the same url"]}
+    else:
+        await page.goto(response.url)
+        return { "page": page , "actions_taken": [f"Navigated to the {response.url}"]}
+    """
+    page = state["page"]
+    await page.goto(IVECO_PLATFORM)
+    return {"page": page, "actions_taken": [f"Navigated to the {IVECO_PLATFORM}"]}
     
 
 # Master Plan Node
@@ -303,10 +332,14 @@ async def remove_highlights_all(page):
     """)
 
 async def get_all_elements(state: AgentState):
-    page = state["page"]
-    dom_elements = await execute_script_all(page)
+    try:
+        page = state["page"]
+        dom_elements = await execute_script_all(page)
 
-    await remove_highlights_all(page)
+        await remove_highlights_all(page)
+    except Exception as e:
+        print(f"get_all_elements: {e}")
+        raise e
 
     return {"dom_elements": dom_elements, "actions_taken": ["Gathered dom elements of all the interactive elements on the page, now I need to decide what to do next."]}
 
@@ -471,7 +504,7 @@ async def get_all_input_elements(state: AgentState):
 # Annotate Button Elements Node
 
 # Load the JavaScript file
-with open("marking_scripts/marking_buttons_2.js", "r", encoding="utf-8") as f:
+with open("marking_scripts/marking_buttons_3.js", "r", encoding="utf-8") as f:
     marking_script_buttons = f.read()
 
 async def execute_script_buttons(page):
@@ -488,6 +521,7 @@ async def execute_script_buttons(page):
 
         
     return dom_tree
+
 
 async def remove_highlights_buttons(page):
 
@@ -536,80 +570,103 @@ async def remove_highlights_buttons(page):
         })();
     """)
 
+
 async def get_all_button_elements(state: AgentState):
-    page = state["page"]
-    dom_elements = await execute_script_buttons(page)
+    try:
+        page = state["page"]
+        dom_elements = await execute_script_buttons(page)
 
 
-    await remove_highlights_buttons(page)
+        await remove_highlights_buttons(page)
+    except Exception as e:
+        print(f"get_all_button_elements error: {e}")
+        raise e
 
     return {"dom_elements": dom_elements, "actions_taken": ["Gathered dom elements of all the interactive button elements on the page"]}
 
 
+def get_instructions(state: AgentState):
+    return """
+    Instructions:
+        1) Log in using the username 'dev01' and the password 'Password01'.
+        2) In the left-side menu, click the <a> tag labeled "SW install & System Access Employee Worldwide - WorldWide".
+        3) Set 'IVG Company' <input> tag to the provided IVG Company.
+        4) Set 'User ID' <input> tag to the provided User ID.
+        5) Click on the <button> tag which have an <icon-search> tag icon inside. The button is located next to the User ID input field.
+        6) Select the provided region, country, location as a values of the corresponding input <select> tag 'Region', input <select> tag 'Country' and input <select> tag 'Location'.
+        7) Send the request through the <button> tag 'Continue'.
+    """
+    # 5) Fill the <input> tag 'IVG Company' with 'Blue Reply'.
+
+
+async def add_instruction(state: AgentState):
+    state['input'] = state['input'] + get_instructions(state['input'])
+
+    return state
 
 # Decide Action Node
 
 async def decide_immediate_action(state: AgentState):
+    try:
+        text_on_page = await scrape_text(state["page"])
 
-    text_on_page = await scrape_text(state["page"])
-
-    system_message = """ 
-
-        WebRover is an autonomous AI agent designed to browse the web, interact with pages, and complete tasks on behalf of user based on user input.
-        
-        You are a crucial part of WebRover AI agent, whose job is to assess the steps you need to take on higher level inorder to perform actions that will interact with web elements.
-
-        To assess you with the answering what is the next best action, you will be given:
-        1. User Input - The task that user wants to perform
-        2. Actions Taken so far
-        3. The current page url
-        4. Text displayed on the current page
-        
-
-        Your answer should be strictly the following:
-        1. Decide Url: Decide the url you need to visit in order to execute the task give by user
-            - This will most probably  be the first thing you will do
-        2. Get all elements: Get all interactable elements
-            - This will most probably be the step you take if no action have been take so far on the web elements (Actions Taken so far is empty).
-            - This will also be the step you take if you believe you have executed all the actions, just to check if there is still any action left to be taken. For example, if you have already clicked on a button, you will get all the elements again to check if there is any other button to be clicked. Always do this before you respond.
-        3. Get all input elements: This will be the step you take if you decide you need to type in some text input
-        4. Get all button elements: This will be the step you take if you decied to click on a button
-        5. Get all link elements: This will be the action you take if you decide you need to open a link
-        6. Go Back: If you decide you need to go back to the previous page, you should respond with "Go Back"
-        7. Go To Search: If you decide you need to go to a search engine, you should respond with "Go To Search"
-            - Avoid to call Go To Search if you are already on google.com as indicated by the current page url or if you have already navigated to google.com in the previous step.
-        8. Wait: If you decide you need to wait for a page to load, you should respond with "Wait"
-        9. Type in a text editor: If you decide you need to type in a text editor such as a google doc or some similar text editor based on the user input, you should respond with "Type in a text editor"
-            - If you end up at a point where you need to type in a text editor after navigating to the respective text editor url, skip the other steps and directly respond with "Type in a text editor" since, this step has the ability to infer dom element for text editor
-        10. Respond : If you believe you have executed all the actions to task completion and based ont the text on the page you believe you have an indication of the task completion or you have enough information to respond to the user, you should respond with "Respond"
-
-        For reference - The elements that you fetch or url that you decide to visit will later be used to further infer the action to interact with web elements at a granualar level in other step. Such as clicking a button, clinking on a link or typing in a input element.
-
-
-        Provide your answer in this format:
-        Thought: Your reasoning behind the step you decided to take.
-        Step: The exact step you decided
-
-        Provide your answer : {{}}
-        
-    """
-    human_message = """
-    User Input : {input}
-    Actions taken so far : {actions_taken}
-    Current Page: {page}
-    Text on the current page: {text_on_page}
+        system_message = """
+        WebRover is an autonomous AI agent designed to navigate the Iveco platform, interact with interface and complete tasks based on user input.
+            
+    You are a crucial part of WebRover AI agent, whose job is to assess the steps you need to take on higher level in order to perform actions that will interact with web elements.
     
-    """
+    To assess you with the answering what is the next best action, you will be given:
+            1. User Input - The task that user wants to perform
+            2. Actions Taken so far
+            3. The current page url
+            4. Text displayed on the current page
+            
+    
+            Your answer should be strictly the following:
+            1. Go to platform: reach Iveco platform to satisfied the user task. This step is your first action.
+            2. Get all elements: Get all interactable elements
+                - This will most probably be the step you take if no action have been take so far on the web elements (Actions Taken so far is empty).
+                - This will also be the step you take if you believe you have executed all the actions, just to check if there is still any action left to be taken. For example, if you have already clicked on a button, you will get all the elements again to check if there is any other button to be clicked. Always do this before you respond.
+            3. Get all input elements: This will be the step you take if you decide you need to type in some text input
+            4. Get all button elements: This will be the step you take if you decied to click on a button
+            5. Get all link elements: This will be the action you take if you decide you need to open a link
+            6. Go Back: If you decide you need to go back to the previous page, you should respond with "Go Back"
+            7. Wait: If you decide you need to wait for a page to load, you should respond with "Wait"
+            8. Type in a text editor: If you decide you need to type in a text editor such as a google doc or some similar text editor based on the user input, you should respond with "Type in a text editor"
+                - If you end up at a point where you need to type in a text editor after navigating to the respective text editor url, skip the other steps and directly respond with "Type in a text editor" since, this step has the ability to infer dom element for text editor
+            9. Respond : If you believe you have executed all the actions to task completion and based ont the text on the page you believe you have an indication of the task completion or you have enough information to respond to the user, you should respond with "Respond"
+    
+            For reference - The elements that you fetch or url that you decide to visit will later be used to further infer the action to interact with web elements at a granualar level in other step. Such as clicking a button, clinking on a link or typing in a input element.
+            
+            Pay attention to the user's instructions: if they specify the type of element to search for — for example, input — you should select "Get all input elements".
+            When "Get all elements" returns a large number of elements, avoid calling it twice in a row. Instead, use a more specific command, such as "Get all link elements".
+            
+            Provide your answer in this format:
+            Thought: Your reasoning behind the step you decided to take.
+            Step: The exact step you decided
+    
+            Provide your answer : {{}}        
+        """
+        human_message = """
+        User Input : {input}
+        Actions taken so far : {actions_taken}
+        Current Page: {page}
+        Text on the current page: {text_on_page}
+        
+        """
 
-    input = state["input"]
-    actions_taken = state.get("actions_taken", "")
-    page = state["page"]
+        input = state["input"]
+        actions_taken = state.get("actions_taken", "")
+        page = state["page"]
 
 
-    messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken= actions_taken, page=page, text_on_page=text_on_page))]
+        messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken= actions_taken, page=page, text_on_page=text_on_page))]
 
 
-    response = llm.with_structured_output(DecideAction).invoke(messages)
+        response = llm.with_structured_output(DecideAction).invoke(messages)
+    except Exception as e:
+        print(f"decide_immediate_action error: {e}")
+        raise e
 
     return {"decide_action": response, "chat_history": state.get("chat_history", [])}
 
@@ -628,84 +685,92 @@ async def decide_immediate_action_router(state: AgentState):
 
 
 async def interact_with_input_elements(state: AgentState):
-    system_message = """ 
-    WebRover is an autonomous AI agent designed to browse the web, interact with pages, and complete tasks on behalf of user based on user input.
+    try:
+        system_message = """ 
+        WebRover is an autonomous AI agent designed to browse the web, interact with pages, and complete tasks on behalf of user based on user input.
+    
+        You are a crucial part of WebRover AI agent, whose job is to assess all the input elements on the current page and decide which one to interact with.
+    
+        To help you with the task, you will be given:
+        1. All the input elements on the current page
+        2. The user input
+        3. The actions taken so far
+        4. The current page you are on
+    
+        Your job is to create a list of input elements that you think are most likely to help you complete the task.
+    
+        Provide your answer for each input element in the list in this format:
+        Thought: Your reasoning behind the input elements you decided to interact with.
+        Input Element: The input element you decided to interact with.
+    
+        Provide your answer : {{}}
+    
+        """
+        human_message = """
+        User Input : {input}
+        Actions taken so far : {actions_taken}
+        Current Page: {page}
+        All input elements on the current page: {input_elements}
+        """
 
-    You are a crucial part of WebRover AI agent, whose job is to assess all the input elements on the current page and decide which one to interact with.
+        input = state["input"]
+        actions_taken = state.get("actions_taken", "")
+        page = state["page"]
+        input_elements = state["dom_elements"]
 
-    To help you with the task, you will be given:
-    1. All the input elements on the current page
-    2. The user input
-    3. The actions taken so far
-    4. The current page you are on
+        messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken= actions_taken, page=page, input_elements=input_elements))]
 
-    Your job is to create a list of input elements that you think are most likely to help you complete the task.
-
-    Provide your answer for each input element in the list in this format:
-    Thought: Your reasoning behind the input elements you decided to interact with.
-    Input Element: The input element you decided to interact with.
-
-    Provide your answer : {{}}
-
-    """
-    human_message = """
-    User Input : {input}
-    Actions taken so far : {actions_taken}
-    Current Page: {page}
-    All input elements on the current page: {input_elements}
-    """
-
-    input = state["input"]
-    actions_taken = state.get("actions_taken", "")
-    page = state["page"]
-    input_elements = state["dom_elements"]
-
-    messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken= actions_taken, page=page, input_elements=input_elements))]
-
-    response = llm.with_structured_output(Actions).invoke(messages)
+        response = llm.with_structured_output(Actions).invoke(messages)
+    except Exception as e:
+        print(f"interact_with_input_elements: {e}")
+        raise e
 
     return {"actions": response}
 
 # Interact with Button Elements Node
 async def interact_with_button_elements(state: AgentState):
-    system_message = """ 
-        WebRover is an autonomous AI agent designed to browse the web, interact with pages, and complete tasks on behalf of user based on user input.
+    try:
+        system_message = """ 
+            WebRover is an autonomous AI agent designed to browse the web, interact with pages, and complete tasks on behalf of user based on user input.
+    
+            You are a crucial part of WebRover AI agent, whose job is to assess all the button elements on the current page and decide which one to interact with.
+    
+            To help you with the task, you will be given:
+            1. All the button elements on the current page
+            2. The user input
+            3. The actions taken so far
+            4. The current page you are on
+    
+            Your job is to identify the button elements that you think is most likely to help you complete the task. 
+    
+    
+            Provide your answer for each button element in the list in this format:
+            Thought: Your reasoning behind the button element you decided to interact with.
+            Button Element: The button element you decided to interact with.
+    
+    
+            Provide your answer : {{}}
+            
+            """
 
-        You are a crucial part of WebRover AI agent, whose job is to assess all the button elements on the current page and decide which one to interact with.
-
-        To help you with the task, you will be given:
-        1. All the button elements on the current page
-        2. The user input
-        3. The actions taken so far
-        4. The current page you are on
-
-        Your job is to identify the button elements that you think is most likely to help you complete the task. 
-
-
-        Provide your answer for each button element in the list in this format:
-        Thought: Your reasoning behind the button element you decided to interact with.
-        Button Element: The button element you decided to interact with.
-
-
-        Provide your answer : {{}}
-        
+        human_message = """
+        User Input : {input}
+        Actions taken so far : {actions_taken}
+        Current Page: {page}
+        All button elements on the current page: {button_elements}
         """
-    
-    human_message = """
-    User Input : {input}
-    Actions taken so far : {actions_taken}
-    Current Page: {page}
-    All button elements on the current page: {button_elements}
-    """
-    
-    input = state["input"]
-    actions_taken = state.get("actions_taken", "")
-    page = state["page"]
-    button_elements = state["dom_elements"]
 
-    messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken= actions_taken, page=page, button_elements=button_elements))]
+        input = state["input"]
+        actions_taken = state.get("actions_taken", "")
+        page = state["page"]
+        button_elements = state["dom_elements"]
 
-    response = llm.with_structured_output(Actions).invoke(messages)
+        messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken= actions_taken, page=page, button_elements=button_elements))]
+
+        response = llm.with_structured_output(Actions).invoke(messages)
+    except Exception as e:
+        print(f"interact_with_button_elements: {e}")
+        raise e
     
     return {"actions": response}
 
@@ -713,45 +778,49 @@ async def interact_with_button_elements(state: AgentState):
 # Interact with Link Elements Node
 
 async def interact_with_link_elements(state: AgentState):
-    system_message =""" 
-        WebRover is an autonomous AI agent designed to browse the web, interact with pages, and complete tasks on behalf of user based on user input.
-
-        You are a crucial part of WebRover AI agent, whose job is to assess all the link elements on the current page and decide which one to interact with.
-
-        To help you with the task, you will be given:
-        1. All the link elements on the current page
-        2. The user input
-        3. The actions taken so far
-        4. The current page you are on
-
-        Your job is to identify the link elements that you think is most likely to help you complete the task. 
-
-        Provide your answer for each link element in the list in this format:   
-        Thought: Your reasoning behind the link element you decided to interact with.
-        Link Element: The link element you decided to interact with.
-
-        Provide your answer : {{}}
-
-    """
-
-    human_message = """
-    User Input : {input}
-    Actions taken so far : {actions_taken}
-    Current Page: {page}
-    All link elements on the current page: {link_elements}
-    """
+    try:
+        system_message =""" 
+            WebRover is an autonomous AI agent designed to browse the web, interact with pages, and complete tasks on behalf of user based on user input.
     
-    input = state["input"]
-    actions_taken = state.get("actions_taken", "")
-    page = state["page"]
-    link_elements = state["dom_elements"]
-
-    messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken=actions_taken, page=page, link_elements=link_elements))]
+            You are a crucial part of WebRover AI agent, whose job is to assess all the link elements on the current page and decide which one to interact with.
     
-    response = llm.with_structured_output(Actions).invoke(messages)
+            To help you with the task, you will be given:
+            1. All the link elements on the current page
+            2. The user input
+            3. The actions taken so far
+            4. The current page you are on
+    
+            Your job is to identify the link elements that you think is most likely to help you complete the task. 
+    
+            Provide your answer for each link element in the list in this format:   
+            Thought: Your reasoning behind the link element you decided to interact with.
+            Link Element: The link element you decided to interact with.
+    
+            Provide your answer : {{}}
+    
+        """
+
+        human_message = """
+        User Input : {input}
+        Actions taken so far : {actions_taken}
+        Current Page: {page}
+        All link elements on the current page: {link_elements}
+        """
+
+        input = state["input"]
+        actions_taken = state.get("actions_taken", "")
+        page = state["page"]
+        link_elements = state["dom_elements"]
+
+        messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken=actions_taken, page=page, link_elements=link_elements))]
+
+        response = llm.with_structured_output(Actions).invoke(messages)
+    except Exception as e:
+        print(f"interact_with_link_elements error: {e}")
+        raise e
     
     return {"actions": response}
-    
+
     
 # Type / Type in Text Editor Node
 
@@ -762,6 +831,9 @@ async def type(state: AgentState):
     old_page = page.url
     input_actions_taken = []
 
+    xpath = input_action["action_element"]["xpath"]
+    bbox_x = input_action["action_element"]["x"]
+    bbox_y = input_action["action_element"]["y"]
     inViewport = input_action["action_element"]["inViewport"]
     if inViewport == False:
         # First attempt: Smooth scroll into view
@@ -802,88 +874,118 @@ async def type(state: AgentState):
                     bbox_x, bbox_y
                 )
                 await asyncio.sleep(0.5)
-            except Exception:
+            except Exception as e:
                 return {"actions_taken": [f"Failed to scroll to element: {str(e)}"]}
 
 
     text = input_action["args"]
     print("Text to type: ", text)
 
-    
-    try:
-        print("Using XPath")
-        xpath = input_action["action_element"]["xpath"]
-        element = page.locator(f'xpath={xpath}')
-        print("Element: ", element)
-        await asyncio.sleep(2)
-        await element.click()
-        print("Clicked")
-        await asyncio.sleep(2)
-        if platform.system() == "Darwin":
-            await element.press("Meta+A")
-        else:
-            await element.press("Control+A")
-        print("Selected")
-        await element.press("Backspace")
-        print("Backspace")
-        await asyncio.sleep(2)
-        await element.type(input_action["args"])
-        print("Typed")
-        await asyncio.sleep(2)
-        await element.press("Enter")
-        print("Enter")
-        await asyncio.sleep(2)
-        
-        
-
-    except Exception as e:
+    if state['actions']['element_actions']['action_element']['type'] == "dropdown":
         try:
-            # Fallback to coordinates
-            print("Using Bounding Box")
-            bbox_x = input_action["action_element"]["x"]
-            bbox_y = input_action["action_element"]["y"]
-            print("Bounding Box: ", bbox_x, bbox_y)
-            
-            await page.mouse.click(bbox_x, bbox_y)
+            element = page.locator(f'xpath={xpath}')
             await asyncio.sleep(2)
-            
-            select_all = "Meta+A" if platform.system() == "Darwin" else "Control+A"
-            await page.keyboard.press(select_all)
-            await asyncio.sleep(2)
-            await page.keyboard.press("Backspace")
-
-                
-            await asyncio.sleep(2)
-
-            await page.mouse.click(bbox_x, bbox_y)
-            
-         
-            await asyncio.sleep(2)
-            await page.keyboard.type(input_action["args"])
-            print("Typed")
-            await asyncio.sleep(2)
-            await page.keyboard.press("Enter")
-            print("Enter")
-            await asyncio.sleep(2)
-            
-            
+            try:
+                await element.click(timeout=1000)
+            except Exception as original_exception:
+                clicked = False
+                for frame in page.frames:
+                    try:
+                        frame_element = frame.locator(f'xpath={xpath}')
+                        await frame_element.click(timeout=500)
+                        clicked = True
+                        element = frame_element
+                        break
+                    except Exception:
+                        pass
+                if not clicked:
+                    raise original_exception
+            await asyncio.sleep(1)
+            await element.select_option(label=text)
+            print("Selected")
+            await asyncio.sleep(1)
         except Exception as e:
-            input_actions_taken.append(f"Failed to type {text}")
-            
-        
-    
+            input_actions_taken.append(f"Failed to select {text} from dropbox")
+    else:
+        try:
+            print("Using XPath")
+            xpath = input_action["action_element"]["xpath"]
+            element = page.locator(f'xpath={xpath}')
+            print("Element: ", element)
+            await asyncio.sleep(1)
+            try:
+                await element.click(timeout=1000)
+            except Exception as original_exception:
+                clicked = False
+                for frame in page.frames:
+                    try:
+                        frame_element = frame.locator(f'xpath={xpath}')
+                        await frame_element.click(timeout=500)
+                        clicked = True
+                        element = frame_element
+                        break
+                    except Exception:
+                        pass
+                if not clicked:
+                    raise original_exception
+            print("Clicked")
+            await asyncio.sleep(1)
+            if platform.system() == "Darwin":
+                await element.press("Meta+A")
+            else:
+                await element.press("Control+A")
+            await element.press("Backspace")
+            await asyncio.sleep(1)
+            await element.fill(input_action["args"])
+            await asyncio.sleep(1)
+            # await element.press("Enter")
+            # print("Enter")
+            # await asyncio.sleep(2)
+        except Exception as e:
+            try:
+                # Fallback to coordinates
+                print("Using Bounding Box")
+                print("Bounding Box: ", bbox_x, bbox_y)
+
+                await page.mouse.click(bbox_x, bbox_y)
+                await asyncio.sleep(1)
+
+                select_all = "Meta+A" if platform.system() == "Darwin" else "Control+A"
+                await page.keyboard.press(select_all)
+                await asyncio.sleep(1)
+                await page.keyboard.press("Backspace")
+
+
+                await asyncio.sleep(1)
+
+                await page.mouse.click(bbox_x, bbox_y)
+
+
+                await asyncio.sleep(1)
+                await page.keyboard.type(input_action["args"])
+                await asyncio.sleep(1)
+                # await page.keyboard.press("Enter")
+                # print("Enter")
+                # await asyncio.sleep(2)
+
+
+            except Exception as e:
+                input_actions_taken.append(f"Failed to type {text}")
+
+
+
     element_description = (
         f"{'input' if 'input' in input_action['action_element']['type'] else 'text area'} "
         f"element {input_action['action_element']['description']}"
     )
 
-    await asyncio.sleep(5)
+    await asyncio.sleep(2)
 
     action_type = input_action["action_type"] if input_action else None
 
     print("Action Type: ", action_type)
 
-    
+
     if action_type == "type_in_text_editor":
         return {"actions_taken": ["I have successfully typed the entire report into the text editor"]}
     else:
@@ -904,7 +1006,7 @@ async def type(state: AgentState):
 
 async def click(state: AgentState):
     """Handles clicking elements with improved error handling and retry logic."""
-    
+
     click_actions_taken = []
     page = state["page"]
     old_page = page.url
@@ -992,12 +1094,26 @@ async def click(state: AgentState):
                 # Enhanced button/element clicking
                 try:
                     # Try precise click first
-                    await page.locator(f'xpath={xpath}').click(
-                        timeout=5000,
-                        delay=100,  # Add slight delay for stability
-                        force=attempts == max_attempts
-                    )
-                    success = True
+                    button_element = page.locator(f'xpath={xpath}')
+                    try:
+                        await button_element.click(
+                            timeout=3000,
+                            delay=100,  # Add slight delay for stability
+                            force=attempts == max_attempts
+                        )
+                        success = True
+                    except Exception as e:
+                        success = False
+                        for frame in page.frames:
+                            try:
+                                frame_element = frame.locator(f'xpath={xpath}')
+                                await frame_element.click(timeout=1000, delay=100, force=attempts == max_attempts)
+                                success = True
+                                break
+                            except Exception:
+                                pass
+                        if not success:
+                            raise e
                 except Exception as e:
                     # If precise click fails, try coordinate click
                     if attempts == max_attempts - 1:
@@ -1062,6 +1178,8 @@ async def click(state: AgentState):
                             success = True
 
         except Exception as e:
+            if page.url != old_page:
+                success = True
             if attempts == max_attempts:
                 click_actions_taken.append(f"Failed to click {element_type} after {max_attempts} attempts")
                 continue
@@ -1076,6 +1194,8 @@ async def click(state: AgentState):
         # Check if we need to break the loop (page changed)
         if page.url != old_page:
             break
+
+    await asyncio.sleep(3)
 
     # Return appropriate status
     if old_page == state["page"].url:
@@ -1221,13 +1341,13 @@ async def type_in_text_editor(state: AgentState):
 
 builder =  StateGraph(AgentState)
 
+builder.add_node("add_instruction", add_instruction)
 builder.add_node("decide_immediate_action", decide_immediate_action)
-builder.add_node("decide_url", decide_url)
+builder.add_node("go_to_platform", go_to_platform)
 builder.add_node("get_all_elements", get_all_elements)
 builder.add_node("get_all_button_elements", get_all_button_elements)
 builder.add_node("get_all_link_elements", get_all_link_elements)
 builder.add_node("get_all_input_elements", get_all_input_elements)
-
 
 builder.add_node("interact_with_button_elements", interact_with_button_elements)
 builder.add_node("interact_with_link_elements", interact_with_link_elements)
@@ -1246,10 +1366,11 @@ builder.add_node("respond", respond)
 
 
 
-builder.add_edge(START, "decide_immediate_action")
-builder.add_conditional_edges("decide_immediate_action", decide_immediate_action_router, ["decide_url", "get_all_elements", "get_all_input_elements", "get_all_button_elements", "get_all_link_elements", "go_back", "go_to_search", "respond", "wait", "type_in_text_editor"])
+builder.add_edge(START, "add_instruction")
+builder.add_conditional_edges("decide_immediate_action", decide_immediate_action_router, ["go_to_platform", "get_all_elements", "get_all_input_elements", "get_all_button_elements", "get_all_link_elements", "go_back", "go_to_search", "respond", "wait", "type_in_text_editor"])
 
-builder.add_edge("decide_url", "decide_immediate_action")
+builder.add_edge("add_instruction", "decide_immediate_action")
+builder.add_edge("go_to_platform", "decide_immediate_action")
 builder.add_edge("get_all_elements", "decide_immediate_action")
 builder.add_edge("get_all_input_elements", "interact_with_input_elements")
 builder.add_edge("get_all_button_elements", "interact_with_button_elements")
