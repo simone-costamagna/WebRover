@@ -19,8 +19,7 @@ load_dotenv()
 
 IVECO_PLATFORM = os.getenv("IVECO_PLATFORM")
 
-
-
+sleep = 0.5
 
 
 class MasterPlan(TypedDict):
@@ -47,6 +46,9 @@ class Action(TypedDict):
     action_element: DomElement
 
 class Actions(TypedDict):
+    element_actions: List[Action]
+
+class TransactionAction(TypedDict):
     element_actions: Action
 
 class DecideAction(TypedDict):
@@ -271,7 +273,7 @@ with open("marking_scripts/marking.js", "r", encoding="utf-8") as f:
 
 async def execute_script_all(page):
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(sleep*3)
     
     # Run the JavaScript marking function
     dom_tree = await page.evaluate(f"""
@@ -286,7 +288,7 @@ async def execute_script_all(page):
 
 async def remove_highlights_all(page):
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(sleep)
     # Ensure the function is executed properly
     await page.evaluate("""
         (function() {
@@ -352,7 +354,7 @@ with open("marking_scripts/marking_links.js", "r", encoding="utf-8") as f:
 
 async def execute_script_links(page):
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(sleep*2)
     
     # Run the JavaScript marking function
     dom_tree = await page.evaluate(f"""
@@ -367,7 +369,7 @@ async def execute_script_links(page):
 
 async def remove_highlights_links(page):
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(sleep)
     # Ensure the function is executed properly
     await page.evaluate("""
         (function() {
@@ -431,7 +433,7 @@ with open("marking_scripts/marking_input.js", "r", encoding="utf-8") as f:
 
 async def execute_script_input(page):
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(sleep*3)
     
     # Run the JavaScript marking function
     dom_tree = await page.evaluate(f"""
@@ -446,7 +448,7 @@ async def execute_script_input(page):
 
 async def remove_highlights_input(page):
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(sleep)
     # Ensure the function is executed properly
     await page.evaluate("""
         (function() {
@@ -509,7 +511,7 @@ with open("marking_scripts/marking_buttons_3.js", "r", encoding="utf-8") as f:
 
 async def execute_script_buttons(page):
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(sleep*3)
     
     # Run the JavaScript marking function
     dom_tree = await page.evaluate(f"""
@@ -525,7 +527,7 @@ async def execute_script_buttons(page):
 
 async def remove_highlights_buttons(page):
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(sleep)
     # Ensure the function is executed properly
     await page.evaluate("""
         (function() {
@@ -587,16 +589,19 @@ async def get_all_button_elements(state: AgentState):
 
 def get_instructions(state: AgentState):
     return """
-    Instructions:
+    Follow these steps in the exact order to satisfy the task  'open a request -SW install & System Access-':
         1) Log in using the username 'dev01' and the password 'Password01'.
         2) In the left-side menu, click the <a> tag labeled "SW install & System Access Employee Worldwide - WorldWide".
-        3) Set 'IVG Company' <input> tag to the provided IVG Company.
-        4) Set 'User ID' <input> tag to the provided User ID.
-        5) Click on the <button> tag which have an <icon-search> tag icon inside. The button is located next to the User ID input field.
-        6) Select the provided region, country, location as a values of the corresponding input <select> tag 'Region', input <select> tag 'Country' and input <select> tag 'Location'.
-        7) Send the request through the <button> tag 'Continue'.
+        3) Set 'User ID' <input> tag to the provided User ID.
+        4) Click on the <button> tag which have an <icon-search> tag icon inside. The button is located next to the User ID input field.
+        5) Set the provided IVG Company, Region, Country, and Location as the values of their corresponding input elements: <input> tag 'IVG Company' (the first one at index 3), <select> tag 'Region', <select> tag 'Country' and <select> tag 'Location'.
+        6) Proceed to the next step through the <button> tag 'Continue'.
+        7) Tick the checkbox <input> tag 'I Need Hardware/Software' (the second one at index 1).
+        8) Tick the radio button tag 'Technical workstation'.
+        9) Set the provided Request type as the values of the <select> tag 'Request type'.
+        10) Set the provided Computer Name, Asset and Serial Number as the values of their corresponding input elements: <select> tag 'Computer Name', <select> tag 'Asset' and <select> tag 'Serial Number'.
+        11) Proceed to the next step through the <button> tag 'Continue'.
     """
-    # 5) Fill the <input> tag 'IVG Company' with 'Blue Reply'.
 
 
 async def add_instruction(state: AgentState):
@@ -605,42 +610,42 @@ async def add_instruction(state: AgentState):
     return state
 
 # Decide Action Node
-
+"""
+2. Get all elements: Get all interactable elements
+                - This will most probably be the step you take if no action have been take so far on the web elements (Actions Taken so far is empty).
+                - This will also be the step you take if you believe you have executed all the actions, just to check if there is still any action left to be taken. For example, if you have already clicked on a button, you will get all the elements again to check if there is any other button to be clicked. Always do this before you respond.
+"""
 async def decide_immediate_action(state: AgentState):
     try:
         text_on_page = await scrape_text(state["page"])
 
         system_message = """
-        WebRover is an autonomous AI agent designed to navigate the Iveco platform, interact with interface and complete tasks based on user input.
+        WebRover is an autonomous AI agent designed to navigate the Iveco platform and complete tasks based on user input.
             
-    You are a crucial part of WebRover AI agent, whose job is to assess the steps you need to take on higher level in order to perform actions that will interact with web elements.
+    Your job is to assess the steps you need to take on higher level in order to perform actions that will interact with web elements.
     
     To assess you with the answering what is the next best action, you will be given:
             1. User Input - The task that user wants to perform
-            2. Actions Taken so far
-            3. The current page url
-            4. Text displayed on the current page
+            2. Instructions - Steps that you have to follow to satisfy the task
+            3. Actions Taken so far
+            4. The current page url
+            5. Text displayed on the current page
             
-    
             Your answer should be strictly the following:
             1. Go to platform: reach Iveco platform to satisfied the user task. This step is your first action.
-            2. Get all elements: Get all interactable elements
-                - This will most probably be the step you take if no action have been take so far on the web elements (Actions Taken so far is empty).
-                - This will also be the step you take if you believe you have executed all the actions, just to check if there is still any action left to be taken. For example, if you have already clicked on a button, you will get all the elements again to check if there is any other button to be clicked. Always do this before you respond.
-            3. Get all input elements: This will be the step you take if you decide you need to type in some text input
-            4. Get all button elements: This will be the step you take if you decied to click on a button
-            5. Get all link elements: This will be the action you take if you decide you need to open a link
+            2. Get all elements: Retrieve all interactable elements to understand where you are, check for errors or to capture a screenshot of the current page. Use this only if you're blocked or to check you are following the instructions correctly.
+            3. Get all input elements: step you take if you decide you need to type in some text input or tick a checkbox or select from a dropdown.
+            4. Get all button elements: step you take if you decied to click on a button
+            5. Get all link elements: action you take if you decide you need to open a link
             6. Go Back: If you decide you need to go back to the previous page, you should respond with "Go Back"
             7. Wait: If you decide you need to wait for a page to load, you should respond with "Wait"
             8. Type in a text editor: If you decide you need to type in a text editor such as a google doc or some similar text editor based on the user input, you should respond with "Type in a text editor"
                 - If you end up at a point where you need to type in a text editor after navigating to the respective text editor url, skip the other steps and directly respond with "Type in a text editor" since, this step has the ability to infer dom element for text editor
             9. Respond : If you believe you have executed all the actions to task completion and based ont the text on the page you believe you have an indication of the task completion or you have enough information to respond to the user, you should respond with "Respond"
-    
-            For reference - The elements that you fetch or url that you decide to visit will later be used to further infer the action to interact with web elements at a granualar level in other step. Such as clicking a button, clinking on a link or typing in a input element.
-            
-            Pay attention to the user's instructions: if they specify the type of element to search for — for example, input — you should select "Get all input elements".
-            When "Get all elements" returns a large number of elements, avoid calling it twice in a row. Instead, use a more specific command, such as "Get all link elements".
-            
+                
+            If a specific type of element is mentioned (e.g., input), you must choose the corresponding step (e.g., "Get all input elements").
+            Avoid selecting "Get all elements" unless absolutely necessary (e.g., to troubleshoot or investigate a blocked state) or you've navigating to the next step and you want to check to have done all correctly.
+
             Provide your answer in this format:
             Thought: Your reasoning behind the step you decided to take.
             Step: The exact step you decided
@@ -664,9 +669,10 @@ async def decide_immediate_action(state: AgentState):
 
 
         response = llm.with_structured_output(DecideAction).invoke(messages)
+        print(f"Decided Action: {response["step"]}. Through: {response['thought']}\n")
     except Exception as e:
         print(f"decide_immediate_action error: {e}")
-        raise e
+        raise
 
     return {"decide_action": response, "chat_history": state.get("chat_history", [])}
 
@@ -674,7 +680,6 @@ async def decide_immediate_action(state: AgentState):
 # Decide Immediate Action Router
 
 async def decide_immediate_action_router(state: AgentState):
-    
     decided_action = state["decide_action"]["step"]
 
     return decided_action
@@ -721,6 +726,7 @@ async def interact_with_input_elements(state: AgentState):
         messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken= actions_taken, page=page, input_elements=input_elements))]
 
         response = llm.with_structured_output(Actions).invoke(messages)
+        print(f"Interactive with input elements in this way: {response['element_actions']}\n")
     except Exception as e:
         print(f"interact_with_input_elements: {e}")
         raise e
@@ -767,7 +773,8 @@ async def interact_with_button_elements(state: AgentState):
 
         messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken= actions_taken, page=page, button_elements=button_elements))]
 
-        response = llm.with_structured_output(Actions).invoke(messages)
+        response = llm.with_structured_output(TransactionAction).invoke(messages)
+        print(f"Interactive with button elements in this way: {response['element_actions']}\n")
     except Exception as e:
         print(f"interact_with_button_elements: {e}")
         raise e
@@ -814,7 +821,8 @@ async def interact_with_link_elements(state: AgentState):
 
         messages = [SystemMessage(content=system_message), HumanMessage(content=human_message.format(input=input, actions_taken=actions_taken, page=page, link_elements=link_elements))]
 
-        response = llm.with_structured_output(Actions).invoke(messages)
+        response = llm.with_structured_output(TransactionAction).invoke(messages)
+        print(f"Interactive with link elements in this way: {response['element_actions']}\n")
     except Exception as e:
         print(f"interact_with_link_elements error: {e}")
         raise e
@@ -827,177 +835,178 @@ async def interact_with_link_elements(state: AgentState):
 async def type(state: AgentState):
     """Types text into input fields."""
     page = state["page"]
-    input_action = state["actions"]["element_actions"]
+    input_actions = state["actions"]["element_actions"]
     old_page = page.url
     input_actions_taken = []
 
-    xpath = input_action["action_element"]["xpath"]
-    bbox_x = input_action["action_element"]["x"]
-    bbox_y = input_action["action_element"]["y"]
-    inViewport = input_action["action_element"]["inViewport"]
-    if inViewport == False:
-        # First attempt: Smooth scroll into view
-        try:
-            await page.evaluate(
-                """
-                (xpath) => {
-                    const result = document.evaluate(
-                        xpath, 
-                        document, 
-                        null, 
-                        XPathResult.FIRST_ORDERED_NODE_TYPE, 
-                        null
-                    );
-                    const element = result.singleNodeValue;
-                    if (element) {
-                        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-                        return true;
-                    }
-                    return false;
-                }
-                """,
-                xpath
-            )
-            await asyncio.sleep(1)  # Allow smooth scroll to complete
-        except Exception:
-            # If smooth scroll fails, try instant scroll
+    actions_taken = []
+    for input_action in input_actions:
+        xpath = input_action["action_element"]["xpath"]
+        bbox_x = input_action["action_element"]["x"]
+        bbox_y = input_action["action_element"]["y"]
+        inViewport = input_action["action_element"]["inViewport"]
+        if inViewport == False:
+            # First attempt: Smooth scroll into view
             try:
                 await page.evaluate(
                     """
-                    (x, y) => {
-                        window.scrollTo({
-                            top: y - (window.innerHeight / 2),
-                            behavior: 'instant'
-                        });
+                    (xpath) => {
+                        const result = document.evaluate(
+                            xpath, 
+                            document, 
+                            null, 
+                            XPathResult.FIRST_ORDERED_NODE_TYPE, 
+                            null
+                        );
+                        const element = result.singleNodeValue;
+                        if (element) {
+                            element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+                            return true;
+                        }
+                        return false;
                     }
                     """,
-                    bbox_x, bbox_y
+                    xpath
                 )
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(sleep)  # Allow smooth scroll to complete
+            except Exception:
+                # If smooth scroll fails, try instant scroll
+                try:
+                    await page.evaluate(
+                        """
+                        (x, y) => {
+                            window.scrollTo({
+                                top: y - (window.innerHeight / 2),
+                                behavior: 'instant'
+                            });
+                        }
+                        """,
+                        bbox_x, bbox_y
+                    )
+                    await asyncio.sleep(sleep)
+                except Exception as e:
+                    return {"actions_taken": [f"Failed to scroll to element: {str(e)}"]}
+
+        text = input_action["args"]
+
+        if input_action['action_element']['type'] == "checkbox" or input_action['action_element']['type'] == "radio":
+            try:
+                element = page.locator(f'xpath={xpath}')
+                try:
+                    await element.click(timeout=sleep * 3000)
+                except Exception as original_exception:
+                    clicked = False
+                    for frame in page.frames:
+                        try:
+                            frame_element = frame.locator(f'xpath={xpath}')
+                            await frame_element.click(timeout=sleep*3000)
+                            clicked = True
+                            element = frame_element
+                            break
+                        except Exception:
+                            pass
+                    if not clicked:
+                        raise original_exception
+                await element.check(timeout=sleep*2000)
+                await asyncio.sleep(sleep)
             except Exception as e:
-                return {"actions_taken": [f"Failed to scroll to element: {str(e)}"]}
-
-
-    text = input_action["args"]
-    print("Text to type: ", text)
-
-    if state['actions']['element_actions']['action_element']['type'] == "dropdown":
-        try:
-            element = page.locator(f'xpath={xpath}')
-            await asyncio.sleep(2)
+                input_actions_taken.append(f"Failed to select {text} from dropbox")
+        elif input_action['action_element']['type'] == "dropdown":
             try:
-                await element.click(timeout=1000)
-            except Exception as original_exception:
-                clicked = False
-                for frame in page.frames:
-                    try:
-                        frame_element = frame.locator(f'xpath={xpath}')
-                        await frame_element.click(timeout=500)
-                        clicked = True
-                        element = frame_element
-                        break
-                    except Exception:
-                        pass
-                if not clicked:
-                    raise original_exception
-            await asyncio.sleep(1)
-            await element.select_option(label=text)
-            print("Selected")
-            await asyncio.sleep(1)
-        except Exception as e:
-            input_actions_taken.append(f"Failed to select {text} from dropbox")
-    else:
-        try:
-            print("Using XPath")
-            xpath = input_action["action_element"]["xpath"]
-            element = page.locator(f'xpath={xpath}')
-            print("Element: ", element)
-            await asyncio.sleep(1)
+                element = page.locator(f'xpath={xpath}')
+                try:
+                    await element.click(timeout=sleep*4000)
+                except Exception as original_exception:
+                    clicked = False
+                    for frame in page.frames:
+                        try:
+                            frame_element = frame.locator(f'xpath={xpath}')
+                            await frame_element.click(timeout=sleep*4000)
+                            clicked = True
+                            element = frame_element
+                            break
+                        except Exception:
+                            pass
+                    if not clicked:
+                        raise original_exception
+                await asyncio.sleep(sleep*2)
+                await element.select_option(label=text)
+                await asyncio.sleep(sleep*2)
+            except Exception as e:
+                input_actions_taken.append(f"Failed to select {text} from dropbox")
+        else:
             try:
-                await element.click(timeout=1000)
-            except Exception as original_exception:
-                clicked = False
-                for frame in page.frames:
-                    try:
-                        frame_element = frame.locator(f'xpath={xpath}')
-                        await frame_element.click(timeout=500)
-                        clicked = True
-                        element = frame_element
-                        break
-                    except Exception:
-                        pass
-                if not clicked:
-                    raise original_exception
-            print("Clicked")
-            await asyncio.sleep(1)
-            if platform.system() == "Darwin":
-                await element.press("Meta+A")
-            else:
-                await element.press("Control+A")
-            await element.press("Backspace")
-            await asyncio.sleep(1)
-            await element.fill(input_action["args"])
-            await asyncio.sleep(1)
-            # await element.press("Enter")
-            # print("Enter")
-            # await asyncio.sleep(2)
-        except Exception as e:
-            try:
-                # Fallback to coordinates
-                print("Using Bounding Box")
-                print("Bounding Box: ", bbox_x, bbox_y)
+                xpath = input_action["action_element"]["xpath"]
+                element = page.locator(f'xpath={xpath}')
+                try:
+                    await element.click(timeout=sleep*3000)
+                except Exception as original_exception:
+                    clicked = False
+                    for frame in page.frames:
+                        try:
+                            frame_element = frame.locator(f'xpath={xpath}')
+                            await frame_element.click(timeout=sleep*2000)
+                            clicked = True
+                            element = frame_element
+                            break
+                        except Exception:
+                            pass
+                    if not clicked:
+                        raise original_exception
 
-                await page.mouse.click(bbox_x, bbox_y)
-                await asyncio.sleep(1)
+                await asyncio.sleep(sleep)
+                if platform.system() == "Darwin":
+                    await element.press("Meta+A")
+                else:
+                    await element.press("Control+A")
+                await element.press("Backspace")
+                await asyncio.sleep(sleep)
+                await element.fill(input_action["args"])
 
-                select_all = "Meta+A" if platform.system() == "Darwin" else "Control+A"
-                await page.keyboard.press(select_all)
-                await asyncio.sleep(1)
-                await page.keyboard.press("Backspace")
-
-
-                await asyncio.sleep(1)
-
-                await page.mouse.click(bbox_x, bbox_y)
-
-
-                await asyncio.sleep(1)
-                await page.keyboard.type(input_action["args"])
-                await asyncio.sleep(1)
-                # await page.keyboard.press("Enter")
+                # await element.press("Enter")
                 # print("Enter")
                 # await asyncio.sleep(2)
-
-
             except Exception as e:
-                input_actions_taken.append(f"Failed to type {text}")
+                try:
+                    # Fallback to coordinates
+                    await page.mouse.click(bbox_x, bbox_y)
+                    await asyncio.sleep(sleep)
+
+                    select_all = "Meta+A" if platform.system() == "Darwin" else "Control+A"
+                    await page.keyboard.press(select_all)
+                    await asyncio.sleep(sleep*2)
+                    await page.keyboard.press("Backspace")
+                    await asyncio.sleep(sleep*2)
+                    await page.mouse.click(bbox_x, bbox_y)
+                    await asyncio.sleep(sleep*2)
+                    await page.keyboard.type(input_action["args"])
+                    # await page.keyboard.press("Enter")
+                    # print("Enter")
+                    # await asyncio.sleep(2)
+                except Exception as e:
+                    input_actions_taken.append(f"Failed to type {text}")
 
 
+        element_description = (
+            f"{input_action['action_element']['type']} "
+            f"element {input_action['action_element']['description']}"
+        )
+        action_type = input_action["action_type"] if input_action else None
 
-    element_description = (
-        f"{'input' if 'input' in input_action['action_element']['type'] else 'text area'} "
-        f"element {input_action['action_element']['description']}"
-    )
-
-    await asyncio.sleep(2)
-
-    action_type = input_action["action_type"] if input_action else None
-
-    print("Action Type: ", action_type)
-
-
-    if action_type == "type_in_text_editor":
-        return {"actions_taken": ["I have successfully typed the entire report into the text editor"]}
-    else:
-        if old_page == page.url:
-            print("Old Page: ", old_page)
-            print("Actions Taken: ", [f"Typed {text} into {element_description}"])
-            return {"actions_taken":[f"Typed {text} into {element_description}"], "new_page": False}
+        if action_type == "type_in_text_editor":
+            actions_taken.append("I have successfully typed the entire report into the text editor")
+        elif input_action['action_element']['type'] == 'checkbox' or input_action['action_element']['type'] == 'radio':
+            actions_taken.append(f"Successfully ticked {element_description}")
+        elif input_action['action_element']['type'] == 'dropdown':
+            actions_taken.append(f"Successfully selected {text} from the dropdown {element_description}")
         else:
-            print("Old Page: ", old_page)
-            print("Actions Taken: ", [f"Typed {text} into {element_description}"])
-            return {"actions_taken": [f"Typed {text} into {element_description}"], "new_page": True}
-        
+            actions_taken.append(f"Typed {text} into {element_description} successfully")
+
+    is_new_page = True
+    if old_page == page.url:
+        is_new_page = False
+        print("Actions Taken: ", actions_taken, "- new page:", is_new_page, "\n")
+        return {"actions_taken": actions_taken, "new_page": is_new_page}
 
 
 
@@ -1042,7 +1051,7 @@ async def click(state: AgentState):
                 """,
                 xpath
             )
-            await asyncio.sleep(1)  # Allow smooth scroll to complete
+            await asyncio.sleep(sleep*2)  # Allow smooth scroll to complete
         except Exception:
             # If smooth scroll fails, try instant scroll
             try:
@@ -1057,7 +1066,7 @@ async def click(state: AgentState):
                     """,
                     bbox_x, bbox_y
                 )
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(sleep)
             except Exception as e:
                 return {"actions_taken": [f"Failed to scroll to element: {str(e)}"]}
 
@@ -1075,18 +1084,18 @@ async def click(state: AgentState):
                     if platform.system() == "Darwin":
                         await page.locator(f'xpath={xpath}').click(
                             modifiers=["Meta"],
-                            timeout=5000,
+                            timeout=2000,
                             force=attempts == max_attempts  # Force click on last attempt
                         )
                     else:
                         await page.locator(f'xpath={xpath}').click(
                             modifiers=["Control"],
-                            timeout=5000,
+                            timeout=2000,
                             force=attempts == max_attempts
                         )
                     
                     new_page = await new_page_info.value
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(sleep*3)
                     await new_page.bring_to_front()
                     state["page"] = new_page
                     success = True
@@ -1097,8 +1106,8 @@ async def click(state: AgentState):
                     button_element = page.locator(f'xpath={xpath}')
                     try:
                         await button_element.click(
-                            timeout=3000,
-                            delay=100,  # Add slight delay for stability
+                            timeout=sleep*3000,
+                            delay=sleep*100,  # Add slight delay for stability
                             force=attempts == max_attempts
                         )
                         success = True
@@ -1107,7 +1116,7 @@ async def click(state: AgentState):
                         for frame in page.frames:
                             try:
                                 frame_element = frame.locator(f'xpath={xpath}')
-                                await frame_element.click(timeout=1000, delay=100, force=attempts == max_attempts)
+                                await frame_element.click(timeout=sleep*3000, delay=sleep*100, force=attempts == max_attempts)
                                 success = True
                                 break
                             except Exception:
@@ -1137,7 +1146,7 @@ async def click(state: AgentState):
                             """,
                             xpath
                         )
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(sleep*2)
                     else:
                         # Try coordinate-based click
                         await page.mouse.click(
@@ -1148,7 +1157,7 @@ async def click(state: AgentState):
                         )
                     
                     # Wait briefly to check if click had an effect
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(sleep*2)
                     
                     # Check if page changed or any visible effect occurred
                     if page.url != old_page:
@@ -1183,19 +1192,20 @@ async def click(state: AgentState):
             if attempts == max_attempts:
                 click_actions_taken.append(f"Failed to click {element_type} after {max_attempts} attempts")
                 continue
-            await asyncio.sleep(1)  # Brief pause before retry
+            await asyncio.sleep(sleep*2)  # Brief pause before retry
 
         element_description = (
             f"{click_action['action_element']['text']} {click_action['action_element']['type']}"
         )
         if success:
-            click_actions_taken.append(f"Successfully clicked {element_description}")
+            print(f"Successfully clicked on: {element_description}\n")
+            click_actions_taken.append(f"Successfully clicked on {element_description}")
         
         # Check if we need to break the loop (page changed)
         if page.url != old_page:
             break
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(sleep*4)
 
     # Return appropriate status
     if old_page == state["page"].url:
@@ -1368,6 +1378,7 @@ builder.add_node("respond", respond)
 
 builder.add_edge(START, "add_instruction")
 builder.add_conditional_edges("decide_immediate_action", decide_immediate_action_router, ["go_to_platform", "get_all_elements", "get_all_input_elements", "get_all_button_elements", "get_all_link_elements", "go_back", "go_to_search", "respond", "wait", "type_in_text_editor"])
+# builder.add_conditional_edges("decide_immediate_action", decide_immediate_action_router, ["go_to_platform", "get_all_input_elements", "get_all_button_elements", "get_all_link_elements", "go_back", "go_to_search", "respond", "wait", "type_in_text_editor"])
 
 builder.add_edge("add_instruction", "decide_immediate_action")
 builder.add_edge("go_to_platform", "decide_immediate_action")

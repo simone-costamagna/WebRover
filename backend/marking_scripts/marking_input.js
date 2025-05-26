@@ -272,7 +272,8 @@ function captureInteractiveElements(options = {}) {
   function getElementDescription(element, type) {
     const ariaLabel = element.getAttribute('aria-label')?.trim();
     const title = element.getAttribute('title')?.trim();
-    const baseText = ariaLabel || title || getElementText(element, type);
+    const nameVal = element.getAttribute('nameval')?.trim();
+    const baseText = ariaLabel || title || nameVal || getElementText(element, type);
 
     const states = [];
     if (element.disabled) states.push('disabled');
